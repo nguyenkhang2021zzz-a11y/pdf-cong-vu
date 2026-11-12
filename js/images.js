@@ -238,8 +238,10 @@
           if (o.color !== "color") for (let p = 0; p < im.data.length; p += 4) im.data[p + 1] = im.data[p + 2] = im.data[p];
           ctx.putImageData(im, 0, 0);
         }
-        const jpg = new Uint8Array(await (await toBlob(c, "image/jpeg", q)).arrayBuffer());
-        page.drawImage(await pdf.embedJpg(jpg), { x: L.x, y: L.y, width: L.w, height: L.h });
+        const enc = new Uint8Array(await (await toBlob(c, "image/jpeg", q)).arrayBuffer());
+        // trình duyệt không có bộ nén JPEG được phép trả PNG (đúng chuẩn) -> nhận diện theo byte đầu, không tin vào loại đã xin
+        const isJpg = enc[0] === 0xff && enc[1] === 0xd8;
+        page.drawImage(await (isJpg ? pdf.embedJpg(enc) : pdf.embedPng(enc)), { x: L.x, y: L.y, width: L.w, height: L.h });
       } finally {
         free(c);
       }
