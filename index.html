@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#17324d">
+<meta name="description" content="Chuyển ảnh, văn bản, file Word sang PDF ngay trên điện thoại. Trình bày theo Nghị định 30/2020/NĐ-CP.">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PDF Công Vụ">
+<title>PDF Công Vụ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="appbar">
+  <div class="brand">PDF CÔNG VỤ</div>
+  <div class="tagline">Xử lý ngay trên máy · không gửi dữ liệu ra ngoài</div>
+</header>
+
+<main>
+  <!-- ============ ẢNH -> PDF ============ -->
+  <section id="tab-img" class="tab active" aria-label="Ảnh sang PDF">
+    <div class="grid2">
+      <label class="btn primary tall">
+        <input type="file" id="in-camera" accept="image/*" capture="environment" hidden>
+        <svg viewBox="0 0 24 24"><path d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9zm3 4.5A4.5 4.5 0 1 1 12 17.5 4.5 4.5 0 0 1 12 8.5zm0 2A2.5 2.5 0 1 0 12 15.5 2.5 2.5 0 0 0 12 10.5z"/></svg>
+        Chụp ảnh
+      </label>
+      <label class="btn tall">
+        <input type="file" id="in-files" accept="image/*,application/pdf,.pdf" multiple hidden>
+        <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5zm2 0v9.6l3.3-3.3a1 1 0 0 1 1.4 0l3.3 3.3 1.3-1.3a1 1 0 0 1 1.4 0L18 15.6V5H6zm9.5 2a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>
+        Chọn ảnh / PDF
+      </label>
+    </div>
+    <p id="img-empty" class="empty">Chụp hoặc chọn ảnh giấy tờ, hồ sơ. Thứ tự trong danh sách là thứ tự trang.</p>
+    <ul id="img-list" class="list"></ul>
+
+    <details class="card" id="img-opts">
+      <summary>Tùy chọn</summary>
+      <div class="field"><label for="o-paper">Khổ giấy</label>
+        <select id="o-paper"><option value="A4">A4</option><option value="A5">A5</option><option value="A3">A3</option><option value="Letter">Letter</option><option value="fit">Vừa khít ảnh</option></select></div>
+      <div class="field"><label for="o-orient">Hướng giấy</label>
+        <select id="o-orient"><option value="auto">Tự động theo ảnh</option><option value="portrait">Dọc</option><option value="landscape">Ngang</option></select></div>
+      <div class="field"><label for="o-margin">Lề giấy</label>
+        <select id="o-margin"><option value="0">Không lề</option><option value="5">5 mm</option><option value="10">10 mm</option><option value="15">15 mm</option><option value="20">20 mm</option></select></div>
+      <div class="field"><label for="o-color">Màu</label>
+        <select id="o-color"><option value="color">Giữ nguyên màu</option><option value="gray">Thang xám</option><option value="bw">Đen trắng (như máy scan)</option></select></div>
+      <div class="field"><label for="o-quality">Chất lượng</label>
+        <select id="o-quality"><option value="high">Cao - 300 dpi</option><option value="standard">Tiêu chuẩn - 200 dpi</option><option value="small">Nén nhỏ - 150 dpi</option></select></div>
+      <label class="check"><input type="checkbox" id="o-clean"> Làm trắng nền ảnh chụp tài liệu (khử bóng, nền ố vàng)</label>
+      <label class="check"><input type="checkbox" id="o-merge" checked> Gộp tất cả thành 1 file PDF</label>
+    </details>
+    <div class="dock"><button id="img-make" class="btn danger block">TẠO PDF</button></div>
+  </section>
+
+  <!-- ============ SOẠN VĂN BẢN -> PDF ============ -->
+  <section id="tab-txt" class="tab" aria-label="Soạn văn bản sang PDF">
+    <div class="row">
+      <label class="btn small"><input type="file" id="in-txt" accept=".txt,.docx,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>Mở .txt / .docx</label>
+      <button id="txt-clear" class="btn small">Xóa trắng</button>
+      <span class="hint">**đậm** *nghiêng*</span>
+    </div>
+    <textarea id="txt" spellcheck="false" placeholder="Nhập hoặc dán nội dung văn bản.&#10;Mỗi dòng là một đoạn.&#10;**chữ đậm**   *chữ nghiêng*"></textarea>
+
+    <details class="card">
+      <summary>Trình bày (NĐ 30/2020)</summary>
+      <div class="field"><label for="t-size">Cỡ chữ</label><select id="t-size"><option>13</option><option>14</option></select></div>
+      <div class="field"><label for="t-spacing">Giãn dòng</label><select id="t-spacing"><option value="1">1,0 dòng</option><option value="1.15">1,15 dòng</option><option value="1.3">1,3 dòng</option><option value="1.5">1,5 dòng</option></select></div>
+      <div class="field"><label for="t-indent">Lùi đầu dòng</label><select id="t-indent"><option value="1">1 cm</option><option value="1.27">1,27 cm</option><option value="0">Không lùi</option></select></div>
+      <div class="field"><label>Lề (mm)</label>
+        <div class="margins">
+          <span><small>Trên</small><input id="t-mt" inputmode="decimal"></span>
+          <span><small>Dưới</small><input id="t-mb" inputmode="decimal"></span>
+          <span><small>Trái</small><input id="t-ml" inputmode="decimal"></span>
+          <span><small>Phải</small><input id="t-mr" inputmode="decimal"></span>
+        </div></div>
+      <label class="check"><input type="checkbox" id="t-pagenum"> Đánh số trang (từ trang 2, giữa lề trên)</label>
+    </details>
+
+    <details class="card">
+      <summary>Phần đầu văn bản</summary>
+      <label class="check strong"><input type="checkbox" id="t-header"> Có Quốc hiệu, tên cơ quan, số, ngày tháng</label>
+      <div class="field col"><label for="t-chuquan">Cơ quan chủ quản</label><textarea id="t-chuquan" rows="2" placeholder="VD: CÔNG AN TỈNH HÀ TĨNH"></textarea></div>
+      <div class="field col"><label for="t-banhanh">Cơ quan ban hành</label><textarea id="t-banhanh" rows="2" placeholder="VD: PHÒNG THAM MƯU"></textarea></div>
+      <div class="field col"><label for="t-so">Số, ký hiệu</label><input id="t-so" placeholder="VD:       /BC-PV01 (để trống số để ghi tay)"></div>
+      <div class="field col"><label for="t-diadanh">Địa danh</label><input id="t-diadanh" placeholder="VD: Hà Tĩnh"></div>
+      <div class="field col"><label for="t-ngay">Ngày (dd/mm/yyyy)</label><input id="t-ngay" inputmode="numeric" placeholder="Để trống = hôm nay"></div>
+      <label class="check"><input type="checkbox" id="t-blankdate"> Để trống ngày tháng (ghi tay khi ký)</label>
+      <div class="field col"><label for="t-tenloai">Tên loại văn bản</label><input id="t-tenloai" list="dl-tenloai" placeholder="Bỏ trống = Công văn (V/v ...)"><datalist id="dl-tenloai"></datalist></div>
+      <div class="field col"><label for="t-trichyeu">Trích yếu nội dung</label><textarea id="t-trichyeu" rows="2" placeholder="VD: Kết quả công tác tháng 01/2026"></textarea></div>
+    </details>
+
+    <details class="card">
+      <summary>Phần ký và nơi nhận</summary>
+      <label class="check strong"><input type="checkbox" id="t-footer"> Có chức vụ, người ký, nơi nhận</label>
+      <div class="field col"><label for="t-thamquyen">Thẩm quyền ký (nếu có)</label><input id="t-thamquyen" list="dl-thamquyen" placeholder="VD: KT. TRƯỞNG PHÒNG"><datalist id="dl-thamquyen">
+        <option value="KT. TRƯỞNG PHÒNG"><option value="KT. GIÁM ĐỐC"><option value="KT. TRƯỞNG CÔNG AN"><option value="TL. GIÁM ĐỐC"><option value="TUQ. GIÁM ĐỐC"><option value="TM. ĐẢNG ỦY"><option value="Q. TRƯỞNG PHÒNG"></datalist></div>
+      <div class="field col"><label for="t-chucvu">Chức vụ người ký</label><input id="t-chucvu" placeholder="VD: PHÓ TRƯỞNG PHÒNG"></div>
+      <div class="field col"><label for="t-nguoiky">Họ tên người ký</label><input id="t-nguoiky" placeholder="VD: Nguyễn Văn A"></div>
+      <div class="field col"><label for="t-noinhan">Nơi nhận (mỗi nơi một dòng)</label><textarea id="t-noinhan" rows="4" placeholder="VD:&#10;Đ/c Giám đốc (để b/c)&#10;Lưu: VT, PV01"></textarea></div>
+    </details>
+    <div class="dock two"><button id="txt-preview" class="btn">Xem trước</button><button id="txt-make" class="btn danger">TẠO PDF</button></div>
+  </section>
+
+  <!-- ============ WORD -> PDF ============ -->
+  <section id="tab-word" class="tab" aria-label="File Word sang PDF">
+    <label class="btn primary tall single">
+      <input type="file" id="in-word" multiple accept=".docx,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden>
+      <svg viewBox="0 0 24 24"><path d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V9h5.5L13 3.5zM7.5 12l1.4 6h1.4l1.2-4 1.2 4h1.4l1.4-6h-1.5l-.8 3.8L12.9 12h-1.3l-1.3 3.8L9.5 12H7.5z"/></svg>
+      Chọn file Word (.docx)
+    </label>
+    <p class="empty">Trên điện thoại đọc được .docx và .txt. File .doc đời cũ: mở bằng Word/WPS, lưu lại dạng .docx rồi chọn lại. Mọi chữ dùng font Tinos (cùng kích thước với Times New Roman); không giữ header/footer.</p>
+    <ul id="word-list" class="list"></ul>
+    <div class="dock"><button id="word-make" class="btn danger block">CHUYỂN SANG PDF</button></div>
+  </section>
+</main>
+
+<nav class="tabbar">
+  <button data-tab="tab-img" class="active"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5zm2 0v9.6l3.3-3.3a1 1 0 0 1 1.4 0l3.3 3.3 1.3-1.3a1 1 0 0 1 1.4 0L18 15.6V5H6z"/></svg>Ảnh → PDF</button>
+  <button data-tab="tab-txt"><svg viewBox="0 0 24 24"><path d="M4 4h16v2H4zm0 4h16v2H4zm0 4h16v2H4zm0 4h10v2H4z"/></svg>Soạn văn bản</button>
+  <button data-tab="tab-word"><svg viewBox="0 0 24 24"><path d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V9h5.5L13 3.5z"/></svg>File Word</button>
+</nav>
+
+<!-- kết quả -->
+<div id="sheet" class="overlay hidden" role="dialog" aria-modal="true">
+  <div class="sheet">
+    <div class="sheet-head"><b>Đã tạo xong</b><button class="x" data-close aria-label="Đóng">✕</button></div>
+    <ul id="results" class="results"></ul>
+    <div id="results-all" class="row hidden"><button id="share-all" class="btn primary block">Chia sẻ tất cả</button></div>
+  </div>
+</div>
+
+<!-- đang xử lý -->
+<div id="busy" class="overlay hidden">
+  <div class="busybox">
+    <div id="busy-text">Đang xử lý...</div>
+    <div class="bar"><div id="busy-bar"></div></div>
+    <button id="busy-cancel" class="btn small">Hủy</button>
+  </div>
+</div>
+
+<!-- xem trước -->
+<div id="viewer" class="viewer hidden">
+  <div class="viewer-head"><button class="x" data-close aria-label="Đóng">✕</button><span id="viewer-title">Xem trước</span></div>
+  <div id="viewer-pages" class="viewer-pages"></div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="vendor/fontkit.umd.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/nd30.js"></script>
+<script src="js/docx.js"></script>
+<script src="js/images.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
