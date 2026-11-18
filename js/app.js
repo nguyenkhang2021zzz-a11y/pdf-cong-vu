@@ -6,6 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const bridge = () => G.AndroidBridge || null; // có khi chạy trong app Android (APK)
   const state = { imgs: [], words: [], outs: [], fontBytes: null, seq: 0 };
+  let scanner = null; // máy quét giấy tờ (tạo ở phần TAB ẢNH)
 
   const LS = {
     get(k, d) { try { const v = JSON.parse(localStorage.getItem("pdfcv." + k)); return v == null ? d : v; } catch (e) { return d; } },
@@ -30,6 +31,8 @@
     history.pushState({ ov: el.id }, "");
   }
   function closeTop() { // nút Back của điện thoại / nút ✕
+    const sc = document.getElementById("scanner");
+    if (!sc.classList.contains("hidden")) { sc.classList.add("hidden"); if (scanner) scanner.stop(); return true; }
     for (const id of ["viewer", "sheet"]) {
       const el = document.getElementById(id);
       if (!el.classList.contains("hidden")) { el.classList.add("hidden"); if (id === "viewer") $("#viewer-pages").innerHTML = ""; return true; }
@@ -268,6 +271,28 @@
     renderImgs();
   }
   $("#in-camera").addEventListener("change", (e) => { addImgs(e.target.files); e.target.value = ""; });
+
+  /* máy quét trong app; không có camera trực tiếp (http, trình duyệt cũ) -> camera của máy như cũ */
+  scanner = CV.scanner.create($("#scanner"), { onCapture: (f) => addImgs([f]), toast });
+  $("#scan-auto").checked = LS.get("scanauto", true) !== false;
+  $("#scan-auto").addEventListener("change", (e) => LS.set("scanauto", e.target.checked));
+  $("#btn-camera").addEventListener("click", () => {
+    if (!CV.scanner.supported()) { $("#in-camera").click(); return; }
+    openOverlay($("#scanner"));
+    scanner.start(); // gọi ngay trong cú chạm: iPhone chỉ cho mở camera khi người dùng bấm
+  });
+  $("#scan-native").addEventListener("click", () => {
+    $("#in-camera").click(); // vẫn đang trong cú chạm -> mở được camera của máy
+    if (history.state && history.state.ov) history.back(); else closeTop();
+  });
+  $("#scan-done").addEventListener("click", () => {
+    if (history.state && history.state.ov) history.back(); else closeTop();
+  });
+  document.addEventListener("visibilitychange", () => { // ra màn hình chính / khóa máy: tắt camera
+    if (document.hidden && !$("#scanner").classList.contains("hidden")) {
+      if (history.state && history.state.ov) history.back(); else closeTop();
+    }
+  });
   $("#in-files").addEventListener("change", (e) => { addImgs(e.target.files); e.target.value = ""; });
 
   const CROP_NOTE = { yes: " · ✂ đã cắt gọn", off: " · giữ nguyên khung", pending: " · đang dò mép giấy…", no: "" };

@@ -1,5 +1,5 @@
 /* Sinh tự động bởi tools/build.js - đừng sửa tay. */
-const VERSION = "pdfcv-c899cc364a0f";
+const VERSION = "pdfcv-512bd6b7c4be";
 const ASSETS = [
  "./",
  "css/app.css",
@@ -19,6 +19,8 @@ const ASSETS = [
  "js/engine.js",
  "js/images.js",
  "js/nd30.js",
+ "js/scan-worker.js",
+ "js/scanner.js",
  "manifest.webmanifest",
  "vendor/fontkit.umd.min.js",
  "vendor/jszip.min.js",
