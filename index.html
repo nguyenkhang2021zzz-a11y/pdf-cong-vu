@@ -50,6 +50,7 @@
         <select id="o-color"><option value="color">Giữ nguyên màu</option><option value="gray">Thang xám</option><option value="bw">Đen trắng (như máy scan)</option></select></div>
       <div class="field"><label for="o-quality">Chất lượng</label>
         <select id="o-quality"><option value="high">Cao - 300 dpi</option><option value="standard">Tiêu chuẩn - 200 dpi</option><option value="small">Nén nhỏ - 150 dpi</option></select></div>
+      <label class="check"><input type="checkbox" id="o-crop" checked> Tự động cắt gọn giấy tờ (bỏ phần chụp thừa, nắn thẳng ảnh chụp xiên)</label>
       <label class="check"><input type="checkbox" id="o-clean"> Làm trắng nền ảnh chụp tài liệu (khử bóng, nền ố vàng)</label>
       <label class="check"><input type="checkbox" id="o-merge" checked> Gộp tất cả thành 1 file PDF</label>
     </details>
@@ -156,6 +157,7 @@
 <script src="js/engine.js"></script>
 <script src="js/nd30.js"></script>
 <script src="js/docx.js"></script>
+<script src="js/crop.js"></script>
 <script src="js/images.js"></script>
 <script src="js/app.js"></script>
 </body>

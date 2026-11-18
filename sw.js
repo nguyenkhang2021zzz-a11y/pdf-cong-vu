@@ -1,5 +1,5 @@
 /* Sinh tự động bởi tools/build.js - đừng sửa tay. */
-const VERSION = "pdfcv-faa4c54017ee";
+const VERSION = "pdfcv-c899cc364a0f";
 const ASSETS = [
  "./",
  "css/app.css",
@@ -14,6 +14,7 @@ const ASSETS = [
  "icons/maskable-512.png",
  "index.html",
  "js/app.js",
+ "js/crop.js",
  "js/docx.js",
  "js/engine.js",
  "js/images.js",

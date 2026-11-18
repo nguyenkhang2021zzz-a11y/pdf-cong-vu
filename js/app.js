@@ -228,23 +228,40 @@
   const IMG_FIELDS = { paper: "#o-paper", orientation: "#o-orient", margin_mm: "#o-margin", color: "#o-color", quality: "#o-quality" };
   for (const [k, sel] of Object.entries(IMG_FIELDS)) $(sel).value = String(imgOpts[k]);
   $("#o-clean").checked = !!imgOpts.clean_bg;
+  $("#o-crop").checked = imgOpts.auto_crop !== false; // cài đặt cũ chưa có mục này -> bật
   $("#o-merge").checked = imgOpts.merge !== false;
   function readImgOpts() {
     const o = {};
     for (const [k, sel] of Object.entries(IMG_FIELDS)) o[k] = $(sel).value;
     o.margin_mm = +o.margin_mm;
     o.clean_bg = $("#o-clean").checked;
+    o.auto_crop = $("#o-crop").checked;
     o.merge = $("#o-merge").checked;
     LS.set("img", o);
     return o;
   }
-  $("#img-opts").addEventListener("change", readImgOpts);
+  $("#img-opts").addEventListener("change", (e) => { readImgOpts(); if (e.target.id === "o-crop") renderImgs(); });
+
+  // dò mép giấy từng ảnh một (giải mã song song nhiều ảnh 12MP dễ làm iPhone hết bộ nhớ)
+  let analyzing = Promise.resolve();
+  function analyzeLater(it) {
+    analyzing = analyzing.then(async () => {
+      if (!state.imgs.includes(it)) return;
+      try { Object.assign(it, await CV.images.analyze(it.file)); } catch (e) { it.crop = null; }
+      if (!state.imgs.includes(it)) { if (it.thumb) URL.revokeObjectURL(it.thumb); return; }
+      refreshCrop(it);
+    });
+  }
 
   function addImgs(fileList) {
     const skipped = [];
     for (const f of Array.from(fileList || [])) {
       if (CV.images.isPdf(f)) state.imgs.push({ id: ++state.seq, file: f, rotation: 0, pdf: true });
-      else if (CV.images.isImage(f)) state.imgs.push({ id: ++state.seq, file: f, rotation: 0, url: URL.createObjectURL(f) });
+      else if (CV.images.isImage(f)) {
+        const it = { id: ++state.seq, file: f, rotation: 0, url: URL.createObjectURL(f), crop: undefined, cropOff: false };
+        state.imgs.push(it);
+        analyzeLater(it);
+      }
       else skipped.push(f.name);
     }
     if (skipped.length) toast("Bỏ qua file không phải ảnh/PDF: " + skipped.join(", "), 4000);
@@ -253,22 +270,44 @@
   $("#in-camera").addEventListener("change", (e) => { addImgs(e.target.files); e.target.value = ""; });
   $("#in-files").addEventListener("change", (e) => { addImgs(e.target.files); e.target.value = ""; });
 
+  const CROP_NOTE = { yes: " · ✂ đã cắt gọn", off: " · giữ nguyên khung", pending: " · đang dò mép giấy…", no: "" };
+  const cropState = (it) => it.pdf || !$("#o-crop").checked ? "" : it.crop === undefined ? "pending" : !it.crop ? "no" : it.cropOff ? "off" : "yes";
+  const subText = (it, st) => `${it.pdf ? "PDF" : "Ảnh"} · ${human(it.file.size)}${it.rotation ? " · xoay " + it.rotation + "°" : ""}${CROP_NOTE[st] || ""}`;
+
   function renderImgs() {
-    const ul = $("#img-list");
-    ul.innerHTML = state.imgs.map((it, i) => `
-      <li class="item" data-id="${it.id}">
+    $("#img-list").innerHTML = state.imgs.map((it, i) => {
+      const st = cropState(it);
+      return `
+      <li class="item" data-id="${it.id}" data-crop="${st}">
         <span class="idx">${i + 1}</span>
-        ${it.pdf ? `<div class="thumb">PDF</div>` : `<img class="thumb" src="${it.url}" alt="" style="transform:rotate(${it.rotation}deg)">`}
-        <div class="meta"><div class="name">${esc(it.file.name)}</div><div class="sub">${it.pdf ? "PDF" : "Ảnh"} · ${human(it.file.size)}${it.rotation ? " · xoay " + it.rotation + "°" : ""}</div></div>
+        ${it.pdf ? `<div class="thumb">PDF</div>` : `<img class="thumb" src="${st === "yes" && it.thumb ? it.thumb : it.url}" alt="" style="transform:rotate(${it.rotation}deg)">`}
+        <div class="meta"><div class="name">${esc(it.file.name)}</div><div class="sub">${subText(it, st)}</div></div>
         <div class="ops">
+          ${it.pdf ? "" : `<button data-op="crop" aria-label="Cắt gọn">✂</button>`}
           <button data-op="up" aria-label="Lên">↑</button>
           <button data-op="down" aria-label="Xuống">↓</button>
           <button data-op="rot" aria-label="Xoay">↻</button>
           <button data-op="del" aria-label="Xóa">✕</button>
         </div>
-      </li>`).join("");
+      </li>`;
+    }).join("");
+    state.imgs.forEach(refreshCrop);
     $("#img-empty").style.display = state.imgs.length ? "none" : "";
     $("#img-make").textContent = state.imgs.length ? `TẠO PDF (${state.imgs.length} file)` : "TẠO PDF";
+  }
+  // dò xong một ảnh: chỉ sửa đúng dòng đó, không vẽ lại cả danh sách (khỏi nuốt mất cú chạm đang bấm dở)
+  function refreshCrop(it) {
+    const li = $(`#img-list .item[data-id="${it.id}"]`);
+    if (!li || it.pdf) return;
+    const st = cropState(it);
+    li.dataset.crop = st;
+    const img = li.querySelector("img.thumb"), want = st === "yes" && it.thumb ? it.thumb : it.url;
+    if (img.getAttribute("src") !== want) img.src = want;
+    li.querySelector(".sub").textContent = subText(it, st);
+    const b = li.querySelector('[data-op="crop"]'); // luôn giữ chỗ để các nút khác không xê dịch
+    b.style.visibility = st === "yes" || st === "off" ? "" : "hidden";
+    b.classList.toggle("on", st === "yes");
+    b.setAttribute("aria-pressed", String(st === "yes"));
   }
   $("#img-list").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-op]");
@@ -280,7 +319,12 @@
       case "up": if (i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]]; break;
       case "down": if (i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]]; break;
       case "rot": L[i].rotation = (L[i].rotation + 90) % 360; break;
-      case "del": if (L[i].url) URL.revokeObjectURL(L[i].url); L.splice(i, 1); break;
+      case "crop": L[i].cropOff = !L[i].cropOff; break;
+      case "del":
+        if (L[i].url) URL.revokeObjectURL(L[i].url);
+        if (L[i].thumb) URL.revokeObjectURL(L[i].thumb);
+        L.splice(i, 1);
+        break;
     }
     renderImgs();
   });

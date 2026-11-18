@@ -8,7 +8,7 @@
   // chất lượng: [dpi ảnh màu/xám, chất lượng JPEG, dpi ảnh đen trắng]
   const QUALITY = { high: [300, 0.9, 300], standard: [200, 0.8, 300], small: [150, 0.6, 200] };
   const MAX_PIXELS = 16e6; // giới hạn diện tích canvas của Safari trên iPhone
-  const DEFAULTS = { paper: "A4", orientation: "auto", margin_mm: 10, color: "color", clean_bg: false, quality: "standard" };
+  const DEFAULTS = { paper: "A4", orientation: "auto", margin_mm: 10, color: "color", clean_bg: false, quality: "standard", auto_crop: true };
 
   class Cancelled extends Error { constructor() { super("Đã hủy"); this.cancelled = true; } }
 
@@ -199,6 +199,58 @@
       P.drawObject(name), P.popGraphicsState());
   }
 
+  /* --- tự động cắt gọn (thuật toán trong crop.js) */
+  function smallOf(img, w, h) { // ảnh thu nhỏ để dò mép giấy
+    const s = Math.min(1, CV.crop.DET / Math.max(w, h));
+    const sw = Math.max(1, Math.round(w * s)), sh = Math.max(1, Math.round(h * s));
+    const c = canvas(sw, sh), x = c.getContext("2d");
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+    x.drawImage(img, 0, 0, sw, sh);
+    const im = x.getImageData(0, 0, sw, sh);
+    free(c);
+    return im;
+  }
+
+  /** Ảnh đã nắn ow×oh (canvas) từ ảnh gốc iw×ih theo 4 góc q (điểm ảnh gốc). */
+  function warpCanvas(img, iw, ih, q, ow, oh) {
+    // thu ảnh gốc về ~1,3 lần cỡ đích trước (đỡ răng cưa), không vượt giới hạn canvas của iPhone
+    const qw = Math.max(Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]), Math.hypot(q[2][0] - q[3][0], q[2][1] - q[3][1]));
+    const s = Math.min(1, (1.3 * ow) / qw, Math.sqrt(MAX_PIXELS / (iw * ih)));
+    const sw = Math.max(1, Math.round(iw * s)), sh = Math.max(1, Math.round(ih * s));
+    const sc = canvas(sw, sh), sx = sc.getContext("2d");
+    sx.imageSmoothingEnabled = true; sx.imageSmoothingQuality = "high";
+    sx.drawImage(img, 0, 0, sw, sh);
+    const src = sx.getImageData(0, 0, sw, sh);
+    free(sc);
+    const oc = canvas(ow, oh), ox = oc.getContext("2d");
+    const out = ox.createImageData(ow, oh);
+    CV.crop.warp(src.data, sw, sh, q.map(([x, y]) => [(x * sw) / iw, (y * sh) / ih]), out.data, ow, oh);
+    ox.putImageData(out, 0, 0);
+    return oc;
+  }
+
+  /** Dò tờ giấy ngay khi thêm ảnh: {crop: kết quả dò | null, thumb: URL ảnh nhỏ đã cắt | null}. */
+  async function analyze(file) {
+    const d = await decode(file);
+    try {
+      const im = smallOf(d.img, d.w, d.h);
+      const det = CV.crop.detect(im.data, im.width, im.height);
+      if (!det) return { crop: null, thumb: null };
+      const { q, size: [W, H] } = CV.crop.plan(det, im.width, im.height);
+      const t = Math.min(1, 240 / Math.max(W, H));
+      const tw = Math.max(1, Math.round(W * t)), th = Math.max(1, Math.round(H * t));
+      const tc = canvas(tw, th), tx = tc.getContext("2d");
+      const out = tx.createImageData(tw, th);
+      CV.crop.warp(im.data, im.width, im.height, q, out.data, tw, th);
+      tx.putImageData(out, 0, 0);
+      const blob = await toBlob(tc, "image/jpeg", 0.85);
+      free(tc);
+      return { crop: det, thumb: URL.createObjectURL(blob) };
+    } finally {
+      URL.revokeObjectURL(d.url);
+    }
+  }
+
   const toBlob = (c, type, q) => new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("Hết bộ nhớ khi nén ảnh"))), type, q));
 
   async function addImage(pdf, item, o) {
@@ -206,8 +258,16 @@
     const raw = new Uint8Array(await item.file.arrayBuffer());
     const d = await decode(item.file);
     try {
+      // cắt gọn trước khi xoay tay (góc dò được tính trên ảnh đã xoay theo EXIF)
+      let det = null;
+      if (o.auto_crop && !item.cropOff) {
+        if (item.crop !== undefined) det = item.crop;
+        else { const s = smallOf(d.img, d.w, d.h); det = CV.crop.detect(s.data, s.width, s.height); }
+      }
+      const pl = det ? CV.crop.plan(det, d.w, d.h) : null;
+      const cw = pl ? pl.size[0] : d.w, ch = pl ? pl.size[1] : d.h;
       const rot = ((item.rotation % 360) + 360) % 360;
-      const iw = rot % 180 ? d.h : d.w, ih = rot % 180 ? d.w : d.h;
+      const iw = rot % 180 ? ch : cw, ih = rot % 180 ? cw : ch;
       const L = layout(iw, ih, o);
       const page = pdf.addPage([L.pw, L.ph]);
       const useDpi = o.color === "bw" ? bwDpi : dpi;
@@ -216,7 +276,7 @@
       if (tw * th > MAX_PIXELS) { const s = Math.sqrt(MAX_PIXELS / (tw * th)); tw = Math.floor(tw * s); th = Math.floor(th * s); }
 
       // JPEG không cần sửa gì -> nhúng nguyên bản (giữ nguyên chất lượng, nhanh)
-      if (isJpeg(item.file) && !rot && o.color === "color" && !o.clean_bg && iw <= tw * 1.15 &&
+      if (!pl && isJpeg(item.file) && !rot && o.color === "color" && !o.clean_bg && iw <= tw * 1.15 &&
           [0, 1].includes(jpegOrientation(raw))) {
         try {
           page.drawImage(await pdf.embedJpg(raw), { x: L.x, y: L.y, width: L.w, height: L.h });
@@ -224,7 +284,10 @@
         } catch (e) { /* JPEG lạ (CMYK...) -> đi đường canvas */ }
       }
 
-      const c = draw(d.img, rot, tw, th);
+      let src = d.img;
+      if (pl) src = warpCanvas(d.img, d.w, d.h, pl.q, rot % 180 ? th : tw, rot % 180 ? tw : th);
+      const c = draw(src, rot, tw, th);
+      if (pl) free(src);
       try {
         if (o.color !== "color" || o.clean_bg) {
           const ctx = c.getContext("2d");
@@ -314,5 +377,5 @@
     return outs;
   }
 
-  CV.images = { DEFAULTS, PAPERS, QUALITY, isPdf, isImage, jpegOrientation, layout, otsu, packBits, build, Cancelled };
+  CV.images = { DEFAULTS, PAPERS, QUALITY, isPdf, isImage, jpegOrientation, layout, otsu, packBits, build, analyze, Cancelled };
 })(typeof globalThis !== "undefined" ? globalThis : window);

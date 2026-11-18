@@ -73,6 +73,11 @@ main { flex: 1; overflow: hidden; position: relative; }
   font-size: 17px; color: var(--text); padding: 0;
 }
 .ops button:active { background: var(--line); }
+.ops button.on { background: var(--navy); color: #fff; }
+/* danh sách ảnh: hàng nút xuống dưới tên file để tên + ghi chú không bị bóp */
+#img-list .item { display: grid; grid-template-columns: 18px 56px minmax(0, 1fr); column-gap: 10px; row-gap: 6px; }
+#img-list .item .idx, #img-list .item .thumb { grid-row: 1 / span 2; }
+#img-list .item .meta, #img-list .item .ops { grid-column: 3; }
 .idx { font-size: 12px; color: var(--muted); width: 18px; text-align: center; flex: none; }
 
 .card { background: var(--card); border-radius: 12px; border: 1px solid var(--line); margin: 12px 0; padding: 0 14px; }
