@@ -178,14 +178,62 @@ textarea { resize: vertical; }
   position: absolute; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
   padding: 26px 16px calc(22px + var(--safe-b)); color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, .7));
 }
-.scan-auto { display: flex; gap: 8px; align-items: center; font-size: 15px; }
-.scan-auto input { width: 22px; height: 22px; accent-color: #2ecc71; }
+.pill {
+  border: 0; border-radius: 16px; padding: 7px 12px; font: inherit; font-size: 14px; font-weight: 700; flex: none;
+  background: rgba(255, 255, 255, .22); color: #fff;
+}
+.pill[data-auto="1"] { background: #0a84ff; }
+.scan-thumb {
+  justify-self: start; position: relative; width: 54px; height: 70px; padding: 0; border: 2px solid #fff;
+  border-radius: 8px; background: #222; box-shadow: 0 2px 8px rgba(0, 0, 0, .5);
+}
+.scan-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; display: block; }
+.scan-thumb .badge {
+  position: absolute; top: -9px; right: -9px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
+  background: #0a84ff; color: #fff; font-size: 12px; font-weight: 700; line-height: 22px; text-align: center;
+}
+.scan-fly { position: absolute; z-index: 3; pointer-events: none; object-fit: fill; box-shadow: 0 6px 20px rgba(0, 0, 0, .5); }
 .shutter { width: 76px; height: 76px; border-radius: 50%; border: 5px solid #fff; background: rgba(255, 255, 255, .25); padding: 0; }
 .shutter:active { background: #fff; }
 #scan-done { justify-self: end; min-width: 96px; }
 .scan-fallback { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; padding: 24px; }
 .scanner[data-state="error"] .scan-fallback, .scanner[data-state="slow"] .scan-fallback { display: flex; }
 .scanner[data-state="error"] .scan-bottom { display: none; }
+
+/* chỉnh trang */
+.editor { position: fixed; inset: 0; z-index: 37; background: #111; color: #fff; display: flex; flex-direction: column; }
+.ed-head {
+  display: flex; align-items: center; gap: 10px; padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
+}
+.ed-title { flex: 1; text-align: center; font-weight: 600; font-size: 15px; }
+.editor .x { background: rgba(255, 255, 255, .18); color: #fff; }
+.ed-stage { flex: 1; position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+.ed-stage canvas#ed-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ed-handle {
+  position: absolute; width: 46px; height: 46px; margin: -23px 0 0 -23px; touch-action: none; cursor: grab; z-index: 2;
+}
+.ed-handle::after {
+  content: ""; position: absolute; left: 11px; top: 11px; width: 20px; height: 20px; border-radius: 50%;
+  border: 3px solid #0a84ff; background: rgba(255, 255, 255, .9); box-shadow: 0 1px 4px rgba(0, 0, 0, .6);
+}
+.ed-handle.on::after { transform: scale(1.25); }
+.ed-loupe {
+  position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 3px solid #fff; z-index: 3;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .6); pointer-events: none;
+}
+.ed-tools { display: flex; justify-content: center; gap: 8px; padding: 8px 12px 0; }
+.editor .ed-tools .btn { background: rgba(255, 255, 255, .16); color: #fff; }
+.ed-filters { display: flex; justify-content: center; gap: 6px; padding: 10px 12px; }
+.ed-filters button {
+  border: 0; border-radius: 16px; padding: 8px 12px; font: inherit; font-size: 14px; background: rgba(255, 255, 255, .14); color: #fff;
+}
+.ed-filters button.on { background: #ffd60a; color: #000; font-weight: 700; }
+.ed-foot { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 4px 16px calc(14px + var(--safe-b)); }
+.editor:not(.scan) .ed-foot { padding: 0 0 calc(6px + var(--safe-b)); }
+.editor:not(.scan) #ed-keep, .editor:not(.scan) #ed-retake { display: none; }
+.editor.scan #ed-done, .editor.scan #ed-cancel { display: none; }
+.editor .ed-foot .btn:not(.primary) { background: rgba(255, 255, 255, .16); color: #fff; }
+.editor .btn.primary, .scanner .btn.primary { background: #0a84ff; color: #fff; } /* nổi trên nền tối như iOS */
 
 .toast {
   position: fixed; left: 50%; bottom: calc(150px + var(--safe-b)); transform: translateX(-50%) translateY(20px);

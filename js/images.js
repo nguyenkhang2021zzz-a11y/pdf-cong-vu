@@ -229,23 +229,64 @@
     return oc;
   }
 
-  /** Dò tờ giấy ngay khi thêm ảnh: {crop: kết quả dò | null, thumb: URL ảnh nhỏ đã cắt | null}. */
-  async function analyze(file) {
+  // bộ lọc riêng từng trang (màn chỉnh trang / máy quét) - ghi đè tùy chọn chung
+  const FILTERS = {
+    color: { color: "color", clean_bg: false }, doc: { color: "color", clean_bg: true },
+    gray: { color: "gray", clean_bg: false }, bw: { color: "bw", clean_bg: false },
+  };
+  function applyFilter(im, filter) { // xem trước bộ lọc trên ảnh nhỏ, cùng phép xử lý như khi tạo PDF
+    const d = im.data, w = im.width, h = im.height;
+    if (filter === "doc") flatten(d, w, h, [0, 1, 2]);
+    else if (filter === "gray") toGray(d);
+    else if (filter === "bw") {
+      toGray(d);
+      flatten(d, w, h, [0]);
+      const t = otsu(d);
+      for (let p = 0; p < d.length; p += 4) d[p] = d[p + 1] = d[p + 2] = d[p] > t ? 255 : 0;
+    }
+  }
+
+  async function makeThumb(im, det, filter) {
+    let W = im.width, H = im.height, q = null;
+    if (det) { const p = CV.crop.plan(det, im.width, im.height); q = p.q; [W, H] = p.size; }
+    const t = Math.min(1, 240 / Math.max(W, H));
+    const tw = Math.max(1, Math.round(W * t)), th = Math.max(1, Math.round(H * t));
+    const tc = canvas(tw, th), tx = tc.getContext("2d");
+    let out;
+    if (q) {
+      out = tx.createImageData(tw, th);
+      CV.crop.warp(im.data, im.width, im.height, q, out.data, tw, th);
+    } else {
+      const sc = canvas(im.width, im.height);
+      sc.getContext("2d").putImageData(im, 0, 0);
+      tx.drawImage(sc, 0, 0, tw, th);
+      free(sc);
+      out = tx.getImageData(0, 0, tw, th);
+    }
+    if (filter) applyFilter(out, filter);
+    tx.putImageData(out, 0, 0);
+    const blob = await toBlob(tc, "image/jpeg", 0.85);
+    free(tc);
+    return URL.createObjectURL(blob);
+  }
+
+  /** Dò tờ giấy ngay khi thêm ảnh: {crop: kết quả dò | null, thumb: URL ảnh nhỏ | null}. */
+  async function analyze(file, filter) {
     const d = await decode(file);
     try {
       const im = smallOf(d.img, d.w, d.h);
       const det = CV.crop.detect(im.data, im.width, im.height);
-      if (!det) return { crop: null, thumb: null };
-      const { q, size: [W, H] } = CV.crop.plan(det, im.width, im.height);
-      const t = Math.min(1, 240 / Math.max(W, H));
-      const tw = Math.max(1, Math.round(W * t)), th = Math.max(1, Math.round(H * t));
-      const tc = canvas(tw, th), tx = tc.getContext("2d");
-      const out = tx.createImageData(tw, th);
-      CV.crop.warp(im.data, im.width, im.height, q, out.data, tw, th);
-      tx.putImageData(out, 0, 0);
-      const blob = await toBlob(tc, "image/jpeg", 0.85);
-      free(tc);
-      return { crop: det, thumb: URL.createObjectURL(blob) };
+      return { crop: det, thumb: det || filter ? await makeThumb(im, det, filter) : null };
+    } finally {
+      URL.revokeObjectURL(d.url);
+    }
+  }
+
+  /** Ảnh nhỏ theo góc + bộ lọc đã chọn (sau khi chỉnh trang). det null = cả khung. */
+  async function thumb(file, det, filter) {
+    const d = await decode(file);
+    try {
+      return await makeThumb(smallOf(d.img, d.w, d.h), det, filter);
     } finally {
       URL.revokeObjectURL(d.url);
     }
@@ -254,13 +295,14 @@
   const toBlob = (c, type, q) => new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("Hết bộ nhớ khi nén ảnh"))), type, q));
 
   async function addImage(pdf, item, o) {
+    if (item.filter && FILTERS[item.filter]) o = Object.assign({}, o, FILTERS[item.filter]);
     const [dpi, q, bwDpi] = QUALITY[o.quality] || QUALITY.standard;
     const raw = new Uint8Array(await item.file.arrayBuffer());
     const d = await decode(item.file);
     try {
       // cắt gọn trước khi xoay tay (góc dò được tính trên ảnh đã xoay theo EXIF)
       let det = null;
-      if (o.auto_crop && !item.cropOff) {
+      if ((o.auto_crop || item.cropManual) && !item.cropOff) { // góc chỉnh tay luôn được dùng
         if (item.crop !== undefined) det = item.crop;
         else { const s = smallOf(d.img, d.w, d.h); det = CV.crop.detect(s.data, s.width, s.height); }
       }
@@ -377,5 +419,5 @@
     return outs;
   }
 
-  CV.images = { DEFAULTS, PAPERS, QUALITY, isPdf, isImage, jpegOrientation, layout, otsu, packBits, build, analyze, Cancelled };
+  CV.images = { DEFAULTS, PAPERS, QUALITY, FILTERS, isPdf, isImage, jpegOrientation, layout, otsu, packBits, build, analyze, thumb, Cancelled };
 })(typeof globalThis !== "undefined" ? globalThis : window);

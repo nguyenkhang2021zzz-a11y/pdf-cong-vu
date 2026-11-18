@@ -157,15 +157,43 @@
   <div class="scan-top">
     <button class="x" data-close aria-label="Đóng">✕</button>
     <span id="scan-hint">Đang mở camera…</span>
+    <button id="scan-mode" class="pill" data-auto="1">Tự động</button>
     <button id="scan-torch" class="x hidden" aria-label="Đèn flash">⚡</button>
   </div>
   <div class="scan-fallback">
     <button id="scan-native" class="btn primary">Dùng camera của máy</button>
   </div>
   <div class="scan-bottom">
-    <label class="scan-auto"><input type="checkbox" id="scan-auto" checked> Tự chụp</label>
+    <button id="scan-thumb" class="scan-thumb hidden" aria-label="Xem, chỉnh trang vừa chụp"><img alt=""><span class="badge">0</span></button>
     <button id="scan-shot" class="shutter" aria-label="Chụp"></button>
     <button id="scan-done" class="btn primary">Xong · <span id="scan-count">0</span></button>
+  </div>
+</div>
+
+<!-- chỉnh trang: kéo 4 góc, xoay, bộ lọc -->
+<div id="editor" class="editor hidden" role="dialog" aria-modal="true" aria-label="Chỉnh trang">
+  <div class="ed-head">
+    <button class="x" id="ed-cancel" aria-label="Hủy">✕</button>
+    <span class="ed-title">Kéo 4 góc khớp tờ giấy</span>
+    <button class="btn small primary" id="ed-done">Xong</button>
+  </div>
+  <div id="ed-stage" class="ed-stage">
+    <canvas id="ed-canvas"></canvas>
+    <div class="ed-handle" data-k="0"></div><div class="ed-handle" data-k="1"></div>
+    <div class="ed-handle" data-k="2"></div><div class="ed-handle" data-k="3"></div>
+    <canvas id="ed-loupe" class="ed-loupe hidden"></canvas>
+  </div>
+  <div class="ed-tools">
+    <button class="btn small" data-ed="auto">Tự dò</button>
+    <button class="btn small" data-ed="full">Cả ảnh</button>
+    <button class="btn small" data-ed="rot">↻ Xoay</button>
+  </div>
+  <div class="ed-filters" aria-label="Bộ lọc">
+    <button data-filter="color">Gốc</button><button data-filter="doc">Tài liệu</button><button data-filter="gray">Xám</button><button data-filter="bw">Đen trắng</button>
+  </div>
+  <div class="ed-foot">
+    <button class="btn" id="ed-retake">Chụp lại</button>
+    <button class="btn primary" id="ed-keep">Giữ bản quét</button>
   </div>
 </div>
 
@@ -179,6 +207,7 @@
 <script src="js/docx.js"></script>
 <script src="js/crop.js"></script>
 <script src="js/scanner.js"></script>
+<script src="js/editor.js"></script>
 <script src="js/images.js"></script>
 <script src="js/app.js"></script>
 </body>

@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const bridge = () => G.AndroidBridge || null; // có khi chạy trong app Android (APK)
   const state = { imgs: [], words: [], outs: [], fontBytes: null, seq: 0 };
-  let scanner = null; // máy quét giấy tờ (tạo ở phần TAB ẢNH)
+  let scanner = null, editor = null, edResult = null; // máy quét + màn chỉnh trang (tạo ở phần TAB ẢNH)
 
   const LS = {
     get(k, d) { try { const v = JSON.parse(localStorage.getItem("pdfcv." + k)); return v == null ? d : v; } catch (e) { return d; } },
@@ -31,6 +31,13 @@
     history.pushState({ ov: el.id }, "");
   }
   function closeTop() { // nút Back của điện thoại / nút ✕
+    const ed = document.getElementById("editor");
+    if (!ed.classList.contains("hidden")) {
+      const r = edResult || "back";
+      edResult = null;
+      if (editor && !editor.close(r)) history.pushState({ ov: "editor" }, ""); // góc chưa hợp lệ: ở lại
+      return true;
+    }
     const sc = document.getElementById("scanner");
     if (!sc.classList.contains("hidden")) { sc.classList.add("hidden"); if (scanner) scanner.stop(); return true; }
     for (const id of ["viewer", "sheet"]) {
@@ -243,17 +250,51 @@
     LS.set("img", o);
     return o;
   }
-  $("#img-opts").addEventListener("change", (e) => { readImgOpts(); if (e.target.id === "o-crop") renderImgs(); });
+  $("#img-opts").addEventListener("change", (e) => {
+    readImgOpts();
+    if (e.target.id === "o-crop") { renderImgs(); state.imgs.forEach(rethumb); }
+  });
 
-  // dò mép giấy từng ảnh một (giải mã song song nhiều ảnh 12MP dễ làm iPhone hết bộ nhớ)
+  // góc đang áp dụng cho ảnh (null = cả khung) và ảnh nhỏ tương ứng (cắt + bộ lọc)
+  const effDet = (it) => it.pdf || it.cropOff || !it.crop || !($("#o-crop").checked || it.cropManual) ? null : it.crop;
+  const thumbKey = (it, det) => JSON.stringify([det ? det.quad : null, it.filter || ""]);
+  function setThumb(it, url, key) {
+    if (it.thumb) URL.revokeObjectURL(it.thumb);
+    it.thumb = url; it.thumbKey = key;
+  }
+  // giải mã ảnh từng cái một (song song nhiều ảnh 12MP dễ làm iPhone hết bộ nhớ)
   let analyzing = Promise.resolve();
-  function analyzeLater(it) {
-    analyzing = analyzing.then(async () => {
-      if (!state.imgs.includes(it)) return;
-      try { Object.assign(it, await CV.images.analyze(it.file)); } catch (e) { it.crop = null; }
-      if (!state.imgs.includes(it)) { if (it.thumb) URL.revokeObjectURL(it.thumb); return; }
+  const queue = (fn) => { analyzing = analyzing.then(fn).catch(() => {}); };
+  function rethumb(it) {
+    queue(async () => {
+      if (!state.imgs.includes(it) || it.pdf || it.crop === undefined) return;
+      const det = effDet(it), key = thumbKey(it, det);
+      if (it.thumbKey === key) return;
+      setThumb(it, !det && !it.filter ? null : await CV.images.thumb(it.file, det, it.filter), key);
+      if (!state.imgs.includes(it)) { setThumb(it, null, ""); return; }
       refreshCrop(it);
     });
+  }
+  function analyzeLater(it) {
+    queue(async () => {
+      if (!state.imgs.includes(it) || it.crop !== undefined) return;
+      let r = { crop: null, thumb: null };
+      try { r = await CV.images.analyze(it.file, it.filter); } catch (e) { /* ảnh lạ: giữ nguyên */ }
+      if (!it.cropManual) it.crop = r.crop;           // người dùng đã chỉnh tay trong lúc dò: giữ góc chỉnh tay
+      it.autoCrop = r.crop;
+      setThumb(it, r.thumb, thumbKey(it, r.crop));
+      if (!state.imgs.includes(it)) { setThumb(it, null, ""); return; }
+      refreshCrop(it);
+    });
+    rethumb(it);
+  }
+  function removeImg(it) {
+    const i = state.imgs.indexOf(it);
+    if (i < 0) return;
+    if (it.url) URL.revokeObjectURL(it.url);
+    setThumb(it, null, "");
+    state.imgs.splice(i, 1);
+    renderImgs();
   }
 
   function addImgs(fileList) {
@@ -261,7 +302,7 @@
     for (const f of Array.from(fileList || [])) {
       if (CV.images.isPdf(f)) state.imgs.push({ id: ++state.seq, file: f, rotation: 0, pdf: true });
       else if (CV.images.isImage(f)) {
-        const it = { id: ++state.seq, file: f, rotation: 0, url: URL.createObjectURL(f), crop: undefined, cropOff: false };
+        const it = { id: ++state.seq, file: f, rotation: 0, url: URL.createObjectURL(f), crop: undefined, autoCrop: null, cropOff: false };
         state.imgs.push(it);
         analyzeLater(it);
       }
@@ -273,9 +314,35 @@
   $("#in-camera").addEventListener("change", (e) => { addImgs(e.target.files); e.target.value = ""; });
 
   /* máy quét trong app; không có camera trực tiếp (http, trình duyệt cũ) -> camera của máy như cũ */
-  scanner = CV.scanner.create($("#scanner"), { onCapture: (f) => addImgs([f]), toast });
-  $("#scan-auto").checked = LS.get("scanauto", true) !== false;
-  $("#scan-auto").addEventListener("change", (e) => LS.set("scanauto", e.target.checked));
+  /* màn chỉnh trang: kéo 4 góc, xoay, bộ lọc (từ máy quét hoặc nút ✎ trong danh sách) */
+  editor = CV.editor.create($("#editor"), {
+    toast,
+    requestClose: (r) => { edResult = r; if (history.state && history.state.ov === "editor") history.back(); else closeTop(); },
+  });
+  const curFilter = () => { const o = readImgOpts(); return o.color === "bw" ? "bw" : o.color === "gray" ? "gray" : o.clean_bg ? "doc" : "color"; };
+  async function openEditor(it, o) {
+    openOverlay($("#editor"));
+    const r = await editor.open(it, Object.assign({ filter: curFilter() }, o));
+    if (r === "retake") removeImg(it);
+    else if (r === "done" || r === "keep") { renderImgs(); rethumb(it); }
+    return r;
+  }
+
+  scanner = CV.scanner.create($("#scanner"), {
+    auto: LS.get("scanauto", true) !== false,
+    onMode: (a) => LS.set("scanauto", a),
+    onCapture: (file, det) => { // trang quét: dùng luôn góc vừa dò trên khung hình, bộ lọc Tài liệu như iPhone
+      const it = { id: ++state.seq, file, rotation: 0, url: URL.createObjectURL(file), crop: det || undefined,
+        autoCrop: det || null, cropOff: false, cropManual: !!det, filter: "doc" }; // đã quét = luôn cắt theo khung xanh
+      state.imgs.push(it);
+      renderImgs();
+      analyzeLater(it);
+      return it;
+    },
+    onReview: (it) => openEditor(it, { scan: false }),
+    onManual: (it) => openEditor(it, { scan: true }),
+    toast,
+  });
   $("#btn-camera").addEventListener("click", () => {
     if (!CV.scanner.supported()) { $("#in-camera").click(); return; }
     openOverlay($("#scanner"));
@@ -290,14 +357,17 @@
   });
   document.addEventListener("visibilitychange", () => { // ra màn hình chính / khóa máy: tắt camera
     if (document.hidden && !$("#scanner").classList.contains("hidden")) {
-      if (history.state && history.state.ov) history.back(); else closeTop();
+      if (!$("#editor").classList.contains("hidden")) editor.close("back"); // giữ trang đang chỉnh
+      $("#scanner").classList.add("hidden");
+      scanner.stop();
     }
   });
   $("#in-files").addEventListener("change", (e) => { addImgs(e.target.files); e.target.value = ""; });
 
   const CROP_NOTE = { yes: " · ✂ đã cắt gọn", off: " · giữ nguyên khung", pending: " · đang dò mép giấy…", no: "" };
-  const cropState = (it) => it.pdf || !$("#o-crop").checked ? "" : it.crop === undefined ? "pending" : !it.crop ? "no" : it.cropOff ? "off" : "yes";
-  const subText = (it, st) => `${it.pdf ? "PDF" : "Ảnh"} · ${human(it.file.size)}${it.rotation ? " · xoay " + it.rotation + "°" : ""}${CROP_NOTE[st] || ""}`;
+  const cropState = (it) => it.pdf || !($("#o-crop").checked || it.cropManual) ? "" : it.crop === undefined ? "pending" : !it.crop ? "no" : it.cropOff ? "off" : "yes";
+  const subText = (it, st) => `${it.pdf ? "PDF" : "Ảnh"} · ${human(it.file.size)}${it.rotation ? " · xoay " + it.rotation + "°" : ""}${CROP_NOTE[st] || ""}` +
+    (it.filter ? " · " + CV.editor.FILTER_LABEL[it.filter] : "");
 
   function renderImgs() {
     $("#img-list").innerHTML = state.imgs.map((it, i) => {
@@ -305,13 +375,14 @@
       return `
       <li class="item" data-id="${it.id}" data-crop="${st}">
         <span class="idx">${i + 1}</span>
-        ${it.pdf ? `<div class="thumb">PDF</div>` : `<img class="thumb" src="${st === "yes" && it.thumb ? it.thumb : it.url}" alt="" style="transform:rotate(${it.rotation}deg)">`}
+        ${it.pdf ? `<div class="thumb">PDF</div>` : `<img class="thumb" src="${it.thumb || it.url}" alt="" style="transform:rotate(${it.rotation}deg)">`}
         <div class="meta"><div class="name">${esc(it.file.name)}</div><div class="sub">${subText(it, st)}</div></div>
         <div class="ops">
           ${it.pdf ? "" : `<button data-op="crop" aria-label="Cắt gọn">✂</button>`}
           <button data-op="up" aria-label="Lên">↑</button>
           <button data-op="down" aria-label="Xuống">↓</button>
           <button data-op="rot" aria-label="Xoay">↻</button>
+          ${it.pdf ? "" : `<button data-op="edit" aria-label="Chỉnh trang">✎</button>`}
           <button data-op="del" aria-label="Xóa">✕</button>
         </div>
       </li>`;
@@ -326,7 +397,7 @@
     if (!li || it.pdf) return;
     const st = cropState(it);
     li.dataset.crop = st;
-    const img = li.querySelector("img.thumb"), want = st === "yes" && it.thumb ? it.thumb : it.url;
+    const img = li.querySelector("img.thumb"), want = it.thumb || it.url;
     if (img.getAttribute("src") !== want) img.src = want;
     li.querySelector(".sub").textContent = subText(it, st);
     const b = li.querySelector('[data-op="crop"]'); // luôn giữ chỗ để các nút khác không xê dịch
@@ -344,12 +415,9 @@
       case "up": if (i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]]; break;
       case "down": if (i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]]; break;
       case "rot": L[i].rotation = (L[i].rotation + 90) % 360; break;
-      case "crop": L[i].cropOff = !L[i].cropOff; break;
-      case "del":
-        if (L[i].url) URL.revokeObjectURL(L[i].url);
-        if (L[i].thumb) URL.revokeObjectURL(L[i].thumb);
-        L.splice(i, 1);
-        break;
+      case "crop": L[i].cropOff = !L[i].cropOff; rethumb(L[i]); break;
+      case "edit": openEditor(L[i], { scan: false }); return;
+      case "del": removeImg(L[i]); return;
     }
     renderImgs();
   });

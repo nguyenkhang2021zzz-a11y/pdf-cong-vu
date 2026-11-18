@@ -1,5 +1,7 @@
-/* Máy quét giấy tờ trong app: camera sống, viền tờ giấy bám theo khung hình, giữ yên thì tự chụp,
- * chụp liền nhiều trang. Dò mép bằng đúng thuật toán của crop.js (chạy trong Web Worker).
+/* Máy quét giấy tờ trong app, kiểu máy quét tài liệu của iPhone:
+ * camera sống, lớp phủ xanh bám theo tờ giấy, Tự động (giữ yên là tự chụp) / Thủ công (chụp xong chỉnh góc ngay),
+ * ảnh nhỏ trang vừa chụp ở góc dưới (chạm để chỉnh), chụp liền nhiều trang.
+ * Dò mép bằng đúng thuật toán của crop.js (chạy trong Web Worker cho khung hình khỏi giật).
  * Không mở được camera (chưa cho quyền, trình duyệt cũ, không phải https) -> nút dùng camera của máy. */
 (function (G) {
   "use strict";
@@ -7,7 +9,7 @@
   const STEP_MS = 120;     // nhịp dò mép
   const STABLE_MS = 900;   // giữ yên ngần này thì tự chụp
   const MOVE_TOL = 0.015;  // góc xê dịch dưới 1,5% khung = coi như đứng yên
-  const REARM = 0.06;      // sau khi chụp: tờ giấy phải đổi chỗ > 6% (hoặc mất khỏi khung) mới tự chụp tiếp
+  const REARM = 0.06;      // sau khi chụp: tờ giấy phải đổi chỗ > 6% (hoặc ra khỏi khung) mới tự chụp tiếp
 
   const supported = () => !!(G.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   const delta = (a, b) => {
@@ -18,16 +20,36 @@
   const timeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("quá lâu")), ms))]);
   let pageNo = 0; // đánh số trang chụp trong phiên: Trang_01.jpg, Trang_02.jpg...
 
+  /** opts: onCapture(file, det) -> item; onReview(item) -> Promise; onManual(item) -> Promise<"keep"|"retake">;
+   *  auto (bool), onMode(auto), toast(msg) */
   function create(el, opts) {
     const $ = (s) => el.querySelector(s);
     const video = $("#scan-video"), overlay = $("#scan-overlay"), hint = $("#scan-hint");
+    const thumbBtn = $("#scan-thumb"), modeBtn = $("#scan-mode");
     const small = document.createElement("canvas");
     let stream = null, track = null, imageCapture = null, worker = null, running = false, timer = 0;
     let det = null, last = null, stableSince = 0, armed = true, shotQuad = null, lost = 0, busy = false, count = 0;
-    let torchOn = false;
+    let torchOn = false, paused = false, capturing = false, auto = opts.auto !== false;
+    let pages = []; // [{item, thumb (dataURL)}] trang chụp trong phiên này
 
     const say = (t) => { if (hint.textContent !== t) hint.textContent = t; };
     const setState = (s) => { el.dataset.state = s; };
+    const fit = () => { // video hiển thị kiểu "contain": thấy trọn khung sẽ chụp
+      const W = el.clientWidth, H = el.clientHeight, vw = video.videoWidth, vh = video.videoHeight;
+      const s = Math.min(W / vw, H / vh);
+      return { s, ox: (W - vw * s) / 2, oy: (H - vh * s) / 2, vw, vh };
+    };
+
+    function showMode() {
+      modeBtn.dataset.auto = auto ? "1" : "0";
+      modeBtn.textContent = auto ? "Tự động" : "Thủ công";
+    }
+    function showPages() {
+      $("#scan-count").textContent = String(count);
+      const p = pages[pages.length - 1];
+      thumbBtn.classList.toggle("hidden", !p);
+      if (p) { thumbBtn.querySelector("img").src = p.thumb; thumbBtn.querySelector(".badge").textContent = String(count); }
+    }
 
     function draw() {
       const W = el.clientWidth, H = el.clientHeight, dpr = Math.min(2, G.devicePixelRatio || 1);
@@ -36,20 +58,18 @@
       }
       const g = overlay.getContext("2d");
       g.clearRect(0, 0, overlay.width, overlay.height);
-      const vw = video.videoWidth, vh = video.videoHeight;
-      if (!det || !vw) return;
-      // video hiển thị kiểu "contain": thấy trọn khung sẽ chụp (dư đen trên/dưới như app camera)
-      const s = Math.min(W / vw, H / vh), ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
-      const pts = det.quad.map(([x, y]) => [(x * vw * s + ox) * dpr, (y * vh * s + oy) * dpr]);
+      if (!det || !video.videoWidth) return;
+      const f = fit();
+      const pts = det.quad.map(([x, y]) => [(x * f.vw * f.s + f.ox) * dpr, (y * f.vh * f.s + f.oy) * dpr]);
       g.beginPath();
       pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
       g.closePath();
       g.lineJoin = "round";
-      g.lineWidth = 4 * dpr;
-      if (armed) {
-        g.fillStyle = "rgba(46, 204, 113, 0.18)";
+      g.lineWidth = 3 * dpr;
+      if (armed || !auto) { // lớp phủ xanh trong suốt như iPhone
+        g.fillStyle = "rgba(10, 132, 255, 0.32)";
         g.fill();
-        g.strokeStyle = "rgb(46, 204, 113)";
+        g.strokeStyle = "rgb(10, 132, 255)";
         g.setLineDash([]);
       } else { // trang này chụp rồi
         g.strokeStyle = "rgba(255, 255, 255, 0.9)";
@@ -61,41 +81,47 @@
     function onDet(d) {
       busy = false;
       if (!running) return;
-      det = d;
-      const now = performance.now();
-      if (!d) {
-        last = null; stableSince = 0;
-        if (++lost >= 2) armed = true; // tờ cũ đã ra khỏi khung -> sẵn sàng trang mới
-        setState("searching");
-        say(count ? "Đưa trang tiếp theo vào khung hình" : "Đưa cả tờ giấy vào khung hình");
-      } else {
-        lost = 0;
-        if (!armed && shotQuad && delta(d.quad, shotQuad) > REARM) armed = true;
-        if (!last || delta(d.quad, last) >= MOVE_TOL) stableSince = now;
-        last = d.quad;
-        setState("found");
-        if (!armed) say("Đã chụp - lật sang trang tiếp theo");
-        else if (!$("#scan-auto").checked) say("Thấy tờ giấy - bấm nút chụp");
-        else if (now - stableSince >= STABLE_MS) capture();
-        else say("Giữ yên máy…");
+      if (!paused) {
+        det = d;
+        const now = performance.now();
+        if (!d) {
+          last = null; stableSince = 0;
+          if (++lost >= 2) armed = true; // tờ cũ đã ra khỏi khung -> sẵn sàng trang mới
+          setState("searching");
+          say(count ? "Đưa trang tiếp theo vào khung hình" : "Đưa cả tờ giấy vào khung hình");
+        } else {
+          lost = 0;
+          if (!armed && shotQuad && delta(d.quad, shotQuad) > REARM) armed = true;
+          if (!last || delta(d.quad, last) >= MOVE_TOL) stableSince = now;
+          last = d.quad;
+          setState("found");
+          if (!auto) say("Thấy tờ giấy - bấm nút chụp");
+          else if (!armed) say("Đã chụp - lật sang trang tiếp theo");
+          else if (now - stableSince >= STABLE_MS) capture();
+          else say("Giữ yên máy…");
+        }
+        draw();
       }
-      draw();
       timer = setTimeout(tick, STEP_MS);
     }
 
-    function tick() {
-      if (!running) return;
+    function frame() { // khung hình hiện tại thu nhỏ để dò mép
       const vw = video.videoWidth, vh = video.videoHeight;
-      if (busy || video.readyState < 2 || !vw) { timer = setTimeout(tick, STEP_MS); return; }
       const s = Math.min(1, CV.crop.DET / Math.max(vw, vh));
       const sw = Math.max(1, Math.round(vw * s)), sh = Math.max(1, Math.round(vh * s));
       if (small.width !== sw || small.height !== sh) { small.width = sw; small.height = sh; }
       const x = small.getContext("2d", { willReadFrequently: true });
       x.drawImage(video, 0, 0, sw, sh);
-      const im = x.getImageData(0, 0, sw, sh);
+      return x.getImageData(0, 0, sw, sh);
+    }
+
+    function tick() {
+      if (!running) return;
+      if (busy || paused || video.readyState < 2 || !video.videoWidth) { timer = setTimeout(tick, STEP_MS); return; }
+      const im = frame();
       busy = true;
-      if (worker) worker.postMessage({ id: 0, w: sw, h: sh, buf: im.data.buffer }, [im.data.buffer]);
-      else onDet(CV.crop.detect(im.data, sw, sh));
+      if (worker) worker.postMessage({ id: 0, w: im.width, h: im.height, buf: im.data.buffer }, [im.data.buffer]);
+      else onDet(CV.crop.detect(im.data, im.width, im.height));
     }
 
     async function grab() {
@@ -117,22 +143,74 @@
       return blob;
     }
 
-    let capturing = false;
+    function thumbOf(im, d) { // ảnh nhỏ trang vừa chụp (đã nắn nếu thấy tờ giấy)
+      const c = document.createElement("canvas");
+      if (d) {
+        const { q, size: [W, H] } = CV.crop.plan(d, im.width, im.height);
+        const t = Math.min(1, 160 / Math.max(W, H));
+        c.width = Math.max(1, Math.round(W * t)); c.height = Math.max(1, Math.round(H * t));
+        const x = c.getContext("2d"), out = x.createImageData(c.width, c.height);
+        CV.crop.warp(im.data, im.width, im.height, q, out.data, c.width, c.height);
+        x.putImageData(out, 0, 0);
+      } else {
+        const t = Math.min(1, 160 / Math.max(im.width, im.height));
+        c.width = Math.round(im.width * t); c.height = Math.round(im.height * t);
+        const s = document.createElement("canvas");
+        s.width = im.width; s.height = im.height;
+        s.getContext("2d").putImageData(im, 0, 0);
+        c.getContext("2d").drawImage(s, 0, 0, c.width, c.height);
+      }
+      return c.toDataURL("image/jpeg", 0.8);
+    }
+
+    function fly(src, d) { // trang vừa chụp thu nhỏ bay vào ô ảnh góc dưới
+      if (!d || !el.animate) return;
+      const f = fit();
+      const xs = d.quad.map((p) => f.ox + p[0] * f.vw * f.s), ys = d.quad.map((p) => f.oy + p[1] * f.vh * f.s);
+      const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, h = Math.max(...ys) - y0;
+      const im = new Image();
+      im.src = src;
+      im.className = "scan-fly";
+      Object.assign(im.style, { left: x0 + "px", top: y0 + "px", width: w + "px", height: h + "px" });
+      el.appendChild(im);
+      const t = thumbBtn.getBoundingClientRect(), r = el.getBoundingClientRect();
+      const dx = t.left - r.left + t.width / 2 - (x0 + w / 2), dy = t.top - r.top + t.height / 2 - (y0 + h / 2);
+      const a = im.animate([{ transform: "none", opacity: 1 }, { transform: `translate(${dx}px, ${dy}px) scale(${t.width / w})`, opacity: 0.7 }],
+        { duration: 420, easing: "cubic-bezier(.4,0,.6,1)" });
+      a.onfinish = () => im.remove();
+    }
+
     async function capture() {
-      if (capturing || !running) return;
+      if (capturing || !running || !video.videoWidth) return;
       capturing = true;
       armed = false;
-      shotQuad = det ? det.quad : null;
+      const d = det;
+      shotQuad = d ? d.quad : null;
       const fl = $(".scan-flash");
       fl.classList.add("on");
       setTimeout(() => fl.classList.remove("on"), 120);
       try {
+        const im = frame();
         const blob = await grab();
         const name = `Trang_${String(++pageNo).padStart(2, "0")}.jpg`;
+        const item = opts.onCapture(new File([blob], name, { type: "image/jpeg", lastModified: Date.now() }), d);
+        const page = { item, thumb: thumbOf(im, d) };
+        pages.push(page);
         count++;
-        $("#scan-count").textContent = String(count);
-        opts.onCapture(new File([blob], name, { type: "image/jpeg", lastModified: Date.now() }));
+        showPages();
+        fly(page.thumb, d);
         say(`Đã chụp trang ${count}`);
+        if (!auto) { // Thủ công: chỉnh góc ngay, Chụp lại / Giữ bản quét
+          paused = true;
+          const r = await opts.onManual(item);
+          paused = false;
+          if (r === "retake") {
+            pages.pop();
+            count--;
+            showPages();
+            say("Chụp lại trang này");
+          }
+        }
       } catch (e) {
         armed = true;
         opts.toast("Không chụp được: " + e.message);
@@ -149,8 +227,9 @@
     }
 
     async function start() {
-      count = 0; $("#scan-count").textContent = "0";
-      det = last = shotQuad = null; armed = true; lost = 0; stableSince = 0; busy = false; torchOn = false;
+      count = 0; pages = [];
+      showPages(); showMode();
+      det = last = shotQuad = null; armed = true; lost = 0; stableSince = 0; busy = false; torchOn = false; paused = false;
       $("#scan-torch").classList.add("hidden");
       setState("starting");
       say("Đang mở camera…");
@@ -205,7 +284,22 @@
       draw();
     }
 
-    $("#scan-shot").addEventListener("click", () => { if (running && video.videoWidth) capture(); });
+    $("#scan-shot").addEventListener("click", () => { if (running && !paused) capture(); });
+    modeBtn.addEventListener("click", () => {
+      auto = !auto;
+      armed = true;
+      showMode();
+      if (opts.onMode) opts.onMode(auto);
+      draw();
+    });
+    thumbBtn.addEventListener("click", async () => {
+      const p = pages[pages.length - 1];
+      if (!p || paused || capturing) return;
+      paused = true;
+      await opts.onReview(p.item);
+      paused = false;
+      if (p.item.thumb) { p.thumb = p.item.thumb; showPages(); }
+    });
     $("#scan-torch").addEventListener("click", async () => {
       if (!track) return;
       try {
@@ -215,6 +309,7 @@
       } catch (e) { torchOn = false; }
     });
     G.addEventListener("resize", draw);
+    showMode();
     return { start, stop, get count() { return count; } };
   }
 
