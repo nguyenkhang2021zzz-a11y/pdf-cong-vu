@@ -52,6 +52,7 @@
         <select id="o-quality"><option value="high">Cao - 300 dpi</option><option value="standard">Tiêu chuẩn - 200 dpi</option><option value="small">Nén nhỏ - 150 dpi</option></select></div>
       <label class="check"><input type="checkbox" id="o-crop" checked> Tự động cắt gọn giấy tờ (bỏ phần chụp thừa, nắn thẳng ảnh chụp xiên)</label>
       <label class="check"><input type="checkbox" id="o-clean"> Làm trắng nền ảnh chụp tài liệu (khử bóng, nền ố vàng)</label>
+      <label class="check"><input type="checkbox" id="o-ocr"> Nhận dạng chữ (OCR): PDF tìm kiếm, chép được chữ; lấy chữ ra .txt. Chạy ngay trên máy, chậm hơn vài giây mỗi trang</label>
       <label class="check"><input type="checkbox" id="o-merge" checked> Gộp tất cả thành 1 file PDF</label>
     </details>
     <div class="dock"><button id="img-make" class="btn danger block">TẠO PDF</button></div>
@@ -170,6 +171,38 @@
   </div>
 </div>
 
+<!-- ký tên lên PDF -->
+<div id="signer" class="editor signer hidden" role="dialog" aria-modal="true" aria-label="Ký tên">
+  <div class="ed-head">
+    <button class="x" id="sg-cancel" aria-label="Hủy">✕</button>
+    <span class="ed-title">Đặt chữ ký, kéo góc để đổi cỡ</span>
+    <button class="btn small primary" id="sg-done">Xong</button>
+  </div>
+  <div id="sg-stage" class="ed-stage"><canvas id="sg-page"></canvas></div>
+  <div class="sg-nav"><button class="btn small" id="sg-prev" aria-label="Trang trước">‹</button><span id="sg-pno">Trang 1/1</span><button class="btn small" id="sg-next" aria-label="Trang sau">›</button></div>
+  <div class="sg-list" id="sg-list"></div>
+  <div class="sg-note">Chữ ký chỉ lưu trên máy này để dùng lại, không gửi đi đâu.</div>
+</div>
+<div id="sigpad" class="sigpad hidden" role="dialog" aria-modal="true" aria-label="Vẽ chữ ký">
+  <div class="sp-box">
+    <div class="sp-head"><b>Ký vào khung</b>
+      <span class="sp-inks"><button data-ink="#111111" class="on" aria-label="Mực đen"></button><button data-ink="#1a3fb0" aria-label="Mực xanh"></button></span></div>
+    <canvas id="sp-canvas"></canvas>
+    <div class="sp-acts"><button class="btn" id="sp-clear">Xóa</button><button class="btn" id="sp-cancel">Hủy</button><button class="btn primary" id="sp-save">Lưu chữ ký</button></div>
+  </div>
+</div>
+
+<!-- chữ nhận dạng (OCR) -->
+<div id="ocrview" class="overlay hidden" role="dialog" aria-modal="true">
+  <div class="sheet">
+    <div class="sheet-head"><b>Chữ nhận dạng (OCR)</b><button class="x" data-close aria-label="Đóng">✕</button></div>
+    <p class="hint">Máy tự nhận dạng, có thể sai vài chữ - sửa trực tiếp trong khung trước khi chép.</p>
+    <p id="ocr-empty" class="empty hidden">Không nhận ra chữ nào trên các trang ảnh.</p>
+    <textarea id="ocr-text" rows="12"></textarea>
+    <div class="row" style="margin-top:10px"><button id="ocr-copy" class="btn primary" style="flex:1">Chép chữ</button><button id="ocr-save" class="btn" style="flex:1">Lưu .txt</button></div>
+  </div>
+</div>
+
 <!-- chỉnh trang: kéo 4 góc, xoay, bộ lọc -->
 <div id="editor" class="editor hidden" role="dialog" aria-modal="true" aria-label="Chỉnh trang">
   <div class="ed-head">
@@ -189,7 +222,7 @@
     <button class="btn small" data-ed="rot">↻ Xoay</button>
   </div>
   <div class="ed-filters" aria-label="Bộ lọc">
-    <button data-filter="color">Gốc</button><button data-filter="doc">Tài liệu</button><button data-filter="gray">Xám</button><button data-filter="bw">Đen trắng</button>
+    <button data-filter="color">Gốc</button><button data-filter="doc">Tăng cường</button><button data-filter="gray">Xám</button><button data-filter="bw">Đen trắng</button>
   </div>
   <div class="ed-foot">
     <button class="btn" id="ed-retake">Chụp lại</button>
@@ -208,6 +241,8 @@
 <script src="js/crop.js"></script>
 <script src="js/scanner.js"></script>
 <script src="js/editor.js"></script>
+<script src="js/ocr.js"></script>
+<script src="js/sign.js"></script>
 <script src="js/images.js"></script>
 <script src="js/app.js"></script>
 </body>

@@ -7,6 +7,7 @@
   const bridge = () => G.AndroidBridge || null; // có khi chạy trong app Android (APK)
   const state = { imgs: [], words: [], outs: [], fontBytes: null, seq: 0 };
   let scanner = null, editor = null, edResult = null; // máy quét + màn chỉnh trang (tạo ở phần TAB ẢNH)
+  let signer = null, sgResult = null; // ký tên lên PDF kết quả
 
   const LS = {
     get(k, d) { try { const v = JSON.parse(localStorage.getItem("pdfcv." + k)); return v == null ? d : v; } catch (e) { return d; } },
@@ -31,6 +32,15 @@
     history.pushState({ ov: el.id }, "");
   }
   function closeTop() { // nút Back của điện thoại / nút ✕
+    const sg = document.getElementById("signer");
+    if (!sg.classList.contains("hidden")) {
+      const r = sgResult || "back";
+      sgResult = null;
+      if (signer) signer.close(r); else sg.classList.add("hidden");
+      return true;
+    }
+    const ov = document.getElementById("ocrview");
+    if (!ov.classList.contains("hidden")) { ov.classList.add("hidden"); return true; }
     const ed = document.getElementById("editor");
     if (!ed.classList.contains("hidden")) {
       const r = edResult || "back";
@@ -110,12 +120,13 @@
   const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
   async function saveOut(o) {
+    const mime = o.mime || "application/pdf";
     if (bridge()) {
-      toast(bridge().saveFile(o.name, await toB64(o.bytes), "application/pdf"), 4000);
+      toast(bridge().saveFile(o.name, await toB64(o.bytes), mime), 4000);
       return;
     }
     if (IOS) { // bảng chia sẻ của iOS có sẵn "Lưu vào Tệp". Gọi share ngay, không await trước (Safari đòi đang trong cú chạm)
-      const files = [new File([o.bytes], o.name, { type: "application/pdf" })];
+      const files = [new File([o.bytes], o.name, { type: mime })];
       if (navigator.canShare && navigator.canShare({ files })) {
         toast("Chọn \"Lưu vào Tệp\" để lưu file vào máy.", 5000);
         try { await navigator.share({ files }); }
@@ -123,7 +134,7 @@
         return;
       }
     }
-    const url = URL.createObjectURL(new Blob([o.bytes], { type: "application/pdf" }));
+    const url = URL.createObjectURL(new Blob([o.bytes], { type: mime }));
     const a = document.createElement("a");
     a.href = url; a.download = o.name;
     document.body.appendChild(a); a.click(); a.remove();
@@ -148,19 +159,27 @@
     for (const o of outs) await saveOut(o);
   }
 
-  function showResults(outs) {
-    state.outs = outs;
+  function renderResults() {
+    const outs = state.outs;
     $("#results").innerHTML = outs.map((o, i) => `
       <li>
         <input class="fname" data-i="${i}" value="${esc(o.name)}" aria-label="Tên file">
-        <div class="sub">${o.pages} trang · ${human(o.bytes.length)}</div>
+        <div class="sub">${o.pages} trang · ${human(o.bytes.length)}${o.signed ? " · đã ký" : ""}${o.text !== undefined ? " · có chữ (OCR)" : ""}</div>
         <div class="acts">
           <button class="btn" data-act="view" data-i="${i}">Xem</button>
           <button class="btn" data-act="save" data-i="${i}">Lưu về máy</button>
           <button class="btn primary" data-act="share" data-i="${i}">Chia sẻ</button>
         </div>
+        <div class="acts acts2">
+          <button class="btn" data-act="sign" data-i="${i}">✍ Ký tên</button>
+          ${o.text !== undefined ? `<button class="btn" data-act="ocr" data-i="${i}">Aa Chữ (OCR)</button>` : ""}
+        </div>
       </li>`).join("");
     $("#results-all").classList.toggle("hidden", outs.length < 2);
+  }
+  function showResults(outs) {
+    state.outs = outs;
+    renderResults();
     openOverlay($("#sheet"));
   }
   $("#results").addEventListener("input", (e) => {
@@ -173,9 +192,45 @@
     const b = e.target.closest("button[data-act]");
     if (!b) return;
     const o = state.outs[+b.dataset.i];
-    if (b.dataset.act === "view") view(o.bytes, o.name);
-    else if (b.dataset.act === "save") saveOut(o);
+    const act = b.dataset.act;
+    if (act === "view") view(o.bytes, o.name);
+    else if (act === "save") saveOut(o);
+    else if (act === "sign") openSigner(o);
+    else if (act === "ocr") openOcr(o);
     else shareOuts([o]);
+  });
+
+  /* --- ký tên lên PDF kết quả */
+  async function openSigner(o) {
+    if (!signer) {
+      signer = CV.sign.create($("#signer"), {
+        pdfjs: loadPdfjs, toast,
+        requestClose: (r) => { sgResult = r; if (history.state && history.state.ov === "signer") history.back(); else closeTop(); },
+      });
+    }
+    openOverlay($("#signer"));
+    let n = 0;
+    try { n = await signer.open(o); } catch (e) { toast("Không mở được trang để ký: " + e.message); $("#signer").classList.add("hidden"); }
+    if (n) { o.signed = true; renderResults(); toast(`Đã ký ${n} chỗ vào ${o.name}`); }
+  }
+
+  /* --- chữ nhận dạng (OCR): xem, sửa, chép, lưu .txt */
+  let ocrOut = null;
+  function openOcr(o) {
+    ocrOut = o;
+    $("#ocr-text").value = o.text || "";
+    $("#ocr-empty").classList.toggle("hidden", !!(o.text && o.text.trim()));
+    openOverlay($("#ocrview"));
+  }
+  $("#ocr-text").addEventListener("input", (e) => { if (ocrOut) ocrOut.text = e.target.value; });
+  $("#ocr-copy").addEventListener("click", async () => {
+    const t = $("#ocr-text").value;
+    try { await navigator.clipboard.writeText(t); toast("Đã chép chữ - dán vào Word, Zalo..."); }
+    catch (e) { $("#ocr-text").select(); document.execCommand("copy"); toast("Đã chép chữ."); }
+  });
+  $("#ocr-save").addEventListener("click", () => {
+    if (!ocrOut) return;
+    saveOut({ name: ocrOut.name.replace(/\.pdf$/i, "") + ".txt", bytes: new TextEncoder().encode($("#ocr-text").value), mime: "text/plain" });
   });
   $("#share-all").addEventListener("click", () => shareOuts(state.outs));
 
@@ -238,6 +293,7 @@
   const IMG_FIELDS = { paper: "#o-paper", orientation: "#o-orient", margin_mm: "#o-margin", color: "#o-color", quality: "#o-quality" };
   for (const [k, sel] of Object.entries(IMG_FIELDS)) $(sel).value = String(imgOpts[k]);
   $("#o-clean").checked = !!imgOpts.clean_bg;
+  $("#o-ocr").checked = !!imgOpts.ocr;
   $("#o-crop").checked = imgOpts.auto_crop !== false; // cài đặt cũ chưa có mục này -> bật
   $("#o-merge").checked = imgOpts.merge !== false;
   function readImgOpts() {
@@ -245,6 +301,7 @@
     for (const [k, sel] of Object.entries(IMG_FIELDS)) o[k] = $(sel).value;
     o.margin_mm = +o.margin_mm;
     o.clean_bg = $("#o-clean").checked;
+    o.ocr = $("#o-ocr").checked;
     o.auto_crop = $("#o-crop").checked;
     o.merge = $("#o-merge").checked;
     LS.set("img", o);
@@ -425,7 +482,10 @@
   $("#img-make").addEventListener("click", async () => {
     if (!state.imgs.length) { toast("Chưa có ảnh nào. Bấm “Chụp ảnh” hoặc “Chọn ảnh / PDF”."); return; }
     const o = readImgOpts();
-    const outs = await run("Đang tạo PDF...", (ui) => CV.images.build(state.imgs, o, o.merge, ui));
+    const outs = await run(o.ocr ? "Đang tạo PDF, nhận dạng chữ..." : "Đang tạo PDF...", async (ui) => {
+      if (o.ocr) o.ocrFont = (await fontBytes()).r; // font có đủ dấu tiếng Việt cho lớp chữ
+      return CV.images.build(state.imgs, o, o.merge, ui);
+    });
     if (!outs) return;
     if (o.merge) outs[0].name = `HoSo_${stamp()}.pdf`;
     showResults(outs);

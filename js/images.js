@@ -8,7 +8,7 @@
   // chất lượng: [dpi ảnh màu/xám, chất lượng JPEG, dpi ảnh đen trắng]
   const QUALITY = { high: [300, 0.9, 300], standard: [200, 0.8, 300], small: [150, 0.6, 200] };
   const MAX_PIXELS = 16e6; // giới hạn diện tích canvas của Safari trên iPhone
-  const DEFAULTS = { paper: "A4", orientation: "auto", margin_mm: 10, color: "color", clean_bg: false, quality: "standard", auto_crop: true };
+  const DEFAULTS = { paper: "A4", orientation: "auto", margin_mm: 10, color: "color", clean_bg: false, quality: "standard", auto_crop: true, ocr: false };
 
   class Cancelled extends Error { constructor() { super("Đã hủy"); this.cancelled = true; } }
 
@@ -151,6 +151,26 @@
     }
   }
 
+  // làm nét chữ (unsharp mask 3x3) - cùng phép ở ảnh xem trước và khi tạo PDF
+  const SHARPEN = 1.2;
+  function sharpen(d, w, h, amount) {
+    const n = w * h, src = new Float32Array(n), tmp = new Float32Array(n);
+    for (let c = 0; c < 3; c++) {
+      for (let i = 0; i < n; i++) src[i] = d[i * 4 + c];
+      for (let y = 0; y < h; y++) {
+        const r = y * w;
+        for (let x = 0; x < w; x++) tmp[r + x] = (src[r + Math.max(0, x - 1)] + src[r + x] + src[r + Math.min(w - 1, x + 1)]) / 3;
+      }
+      for (let y = 0; y < h; y++) {
+        const up = Math.max(0, y - 1) * w, dn = Math.min(h - 1, y + 1) * w, r = y * w;
+        for (let x = 0; x < w; x++) {
+          const b = (tmp[up + x] + tmp[r + x] + tmp[dn + x]) / 3, v = src[r + x];
+          d[(r + x) * 4 + c] = v + amount * (v - b);
+        }
+      }
+    }
+  }
+
   function toGray(data) {
     for (let p = 0; p < data.length; p += 4) {
       const v = (data[p] * 299 + data[p + 1] * 587 + data[p + 2] * 114) / 1000;
@@ -231,12 +251,12 @@
 
   // bộ lọc riêng từng trang (màn chỉnh trang / máy quét) - ghi đè tùy chọn chung
   const FILTERS = {
-    color: { color: "color", clean_bg: false }, doc: { color: "color", clean_bg: true },
+    color: { color: "color", clean_bg: false }, doc: { color: "color", clean_bg: true, sharpen: true }, // Tăng cường
     gray: { color: "gray", clean_bg: false }, bw: { color: "bw", clean_bg: false },
   };
   function applyFilter(im, filter) { // xem trước bộ lọc trên ảnh nhỏ, cùng phép xử lý như khi tạo PDF
     const d = im.data, w = im.width, h = im.height;
-    if (filter === "doc") flatten(d, w, h, [0, 1, 2]);
+    if (filter === "doc") { flatten(d, w, h, [0, 1, 2]); sharpen(d, w, h, SHARPEN); }
     else if (filter === "gray") toGray(d);
     else if (filter === "bw") {
       toGray(d);
@@ -294,6 +314,17 @@
 
   const toBlob = (c, type, q) => new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("Hết bộ nhớ khi nén ảnh"))), type, q));
 
+  // nhận dạng chữ trên ảnh trang đã xử lý + đặt lớp chữ ẩn đúng chỗ -> PDF tìm kiếm, chép được chữ
+  async function ocrPage(pdf, page, cnv, L, o) {
+    const r = await CV.ocr.recognize(cnv);
+    if (!pdf.__ocrFont) {
+      pdf.registerFontkit(G.fontkit);
+      pdf.__ocrFont = await pdf.embedFont(o.ocrFont, { subset: true });
+    }
+    CV.ocr.addTextLayer(page, pdf.__ocrFont, r.words, L, cnv.width, cnv.height);
+    return r.text;
+  }
+
   async function addImage(pdf, item, o) {
     if (item.filter && FILTERS[item.filter]) o = Object.assign({}, o, FILTERS[item.filter]);
     const [dpi, q, bwDpi] = QUALITY[o.quality] || QUALITY.standard;
@@ -320,10 +351,16 @@
       // JPEG không cần sửa gì -> nhúng nguyên bản (giữ nguyên chất lượng, nhanh)
       if (!pl && isJpeg(item.file) && !rot && o.color === "color" && !o.clean_bg && iw <= tw * 1.15 &&
           [0, 1].includes(jpegOrientation(raw))) {
+        let ok = false;
         try {
           page.drawImage(await pdf.embedJpg(raw), { x: L.x, y: L.y, width: L.w, height: L.h });
-          return;
+          ok = true;
         } catch (e) { /* JPEG lạ (CMYK...) -> đi đường canvas */ }
+        if (ok) {
+          if (!o.ocr) return "";
+          const oc = draw(d.img, 0, tw, th);
+          try { return await ocrPage(pdf, page, oc, L, o); } finally { free(oc); }
+        }
       }
 
       let src = d.img;
@@ -336,9 +373,13 @@
           const im = ctx.getImageData(0, 0, tw, th);
           if (o.color !== "color") toGray(im.data);
           if (o.clean_bg || o.color === "bw") flatten(im.data, tw, th, o.color === "color" ? [0, 1, 2] : [0]);
+          if (o.sharpen && o.color === "color") sharpen(im.data, tw, th, SHARPEN);
           if (o.color === "bw") {
             drawBilevel(pdf, page, packBits(im.data, tw, th, otsu(im.data)), tw, th, L);
-            return;
+            if (!o.ocr) return "";
+            for (let p = 0; p < im.data.length; p += 4) im.data[p + 1] = im.data[p + 2] = im.data[p];
+            ctx.putImageData(im, 0, 0);
+            return await ocrPage(pdf, page, c, L, o);
           }
           if (o.color !== "color") for (let p = 0; p < im.data.length; p += 4) im.data[p + 1] = im.data[p + 2] = im.data[p];
           ctx.putImageData(im, 0, 0);
@@ -347,6 +388,7 @@
         // trình duyệt không có bộ nén JPEG được phép trả PNG (đúng chuẩn) -> nhận diện theo byte đầu, không tin vào loại đã xin
         const isJpg = enc[0] === 0xff && enc[1] === 0xd8;
         page.drawImage(await (isJpg ? pdf.embedJpg(enc) : pdf.embedPng(enc)), { x: L.x, y: L.y, width: L.w, height: L.h });
+        return o.ocr ? await ocrPage(pdf, page, c, L, o) : "";
       } finally {
         free(c);
       }
@@ -373,8 +415,8 @@
 
   async function append(pdf, item, o) {
     try {
-      if (isPdf(item.file)) await addPdf(pdf, item);
-      else await addImage(pdf, item, o);
+      if (isPdf(item.file)) { await addPdf(pdf, item); return ""; }
+      return await addImage(pdf, item, o);
     } catch (e) {
       if (e.cancelled) throw e;
       throw new Error(e.message && e.message.includes(item.file.name) ? e.message
@@ -398,22 +440,28 @@
     if (!items.length) throw new Error("Chưa có ảnh nào trong danh sách.");
     const step = async (i, name) => {
       if (ui && ui.cancelled && ui.cancelled()) throw new Cancelled();
-      if (ui && ui.progress) ui.progress(i, items.length, name);
+      if (ui && ui.progress) ui.progress(i, items.length, o.ocr && !isPdf(items[i].file) ? name + " · đang nhận dạng chữ" : name);
       await new Promise((r) => setTimeout(r, 0)); // nhả luồng cho giao diện vẽ thanh tiến trình
     };
     const outs = [];
-    if (merge) {
-      const name = stem(items[0].file.name);
-      const pdf = await newDoc(name);
-      for (let i = 0; i < items.length; i++) { await step(i, items[i].file.name); await append(pdf, items[i], o); }
-      outs.push({ name: name + ".pdf", bytes: await pdf.save(), pages: pdf.getPageCount() });
-    } else {
-      for (let i = 0; i < items.length; i++) {
-        await step(i, items[i].file.name);
-        const pdf = await newDoc(stem(items[i].file.name));
-        await append(pdf, items[i], o);
-        outs.push({ name: stem(items[i].file.name) + ".pdf", bytes: await pdf.save(), pages: pdf.getPageCount() });
+    const join = (texts) => (o.ocr ? texts.filter(Boolean).join("\n\n") : undefined);
+    try {
+      if (merge) {
+        const name = stem(items[0].file.name);
+        const pdf = await newDoc(name);
+        const texts = [];
+        for (let i = 0; i < items.length; i++) { await step(i, items[i].file.name); texts.push(await append(pdf, items[i], o)); }
+        outs.push({ name: name + ".pdf", bytes: await pdf.save(), pages: pdf.getPageCount(), text: join(texts) });
+      } else {
+        for (let i = 0; i < items.length; i++) {
+          await step(i, items[i].file.name);
+          const pdf = await newDoc(stem(items[i].file.name));
+          const t = await append(pdf, items[i], o);
+          outs.push({ name: stem(items[i].file.name) + ".pdf", bytes: await pdf.save(), pages: pdf.getPageCount(), text: join([t]) });
+        }
       }
+    } finally {
+      if (o.ocr && CV.ocr) CV.ocr.stop(); // trả bộ nhớ cho điện thoại
     }
     if (ui && ui.progress) ui.progress(items.length, items.length, "Xong");
     return outs;

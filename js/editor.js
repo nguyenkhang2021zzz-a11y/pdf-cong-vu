@@ -4,7 +4,7 @@
 (function (G) {
   "use strict";
   const CV = (G.CV = G.CV || {});
-  const FILTER_LABEL = { color: "Gốc", doc: "Tài liệu", gray: "Xám", bw: "Đen trắng" };
+  const FILTER_LABEL = { color: "Gốc", doc: "Tăng cường", gray: "Xám", bw: "Đen trắng" };
   const INSET = [[0.08, 0.08], [0.92, 0.08], [0.92, 0.92], [0.08, 0.92]];
   const FULL = [[0, 0], [1, 0], [1, 1], [0, 1]];
   const copy = (q) => q.map((p) => [p[0], p[1]]);
