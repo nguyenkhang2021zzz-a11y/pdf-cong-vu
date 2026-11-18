@@ -62,27 +62,26 @@
     return t;
   }
 
-  // co/nở ô vuông 2r+1 (tách được theo hàng rồi cột). Co: ngoài ảnh = 1; nở: ngoài ảnh = 0.
+  // co/nở ô vuông 2r+1 (tách hàng rồi cột). Co: ngoài ảnh = 1; nở: ngoài ảnh = 0.
+  // Cửa sổ trượt có bộ đếm: mỗi điểm 2 phép tính dù bán kính lớn (máy quét chạy liên tục).
   function morph(m, w, h, r, all) {
     const a = new Uint8Array(w * h), b = new Uint8Array(w * h);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      let v = all ? 1 : 0;
-      for (let t = -r; t <= r; t++) {
-        const xx = x + t;
-        if (xx < 0 || xx >= w) continue;
-        if (all) v &= m[y * w + xx]; else v |= m[y * w + xx];
+    const bad = all ? 0 : 1; // co: đếm số điểm 0 trong cửa sổ; nở: đếm số điểm 1
+    const pass = (src, dst, n, len, step) => { // n đường, mỗi đường len điểm cách nhau step
+      for (let k = 0; k < n; k++) {
+        const o = k * (step === 1 ? len : 1);
+        let c = 0;
+        for (let i = 0; i <= Math.min(r, len - 1); i++) if (src[o + i * step] === bad) c++;
+        for (let i = 0; i < len; i++) {
+          dst[o + i * step] = all ? (c === 0 ? 1 : 0) : (c > 0 ? 1 : 0);
+          const add = i + r + 1, rem = i - r;
+          if (add < len && src[o + add * step] === bad) c++;
+          if (rem >= 0 && src[o + rem * step] === bad) c--;
+        }
       }
-      a[y * w + x] = v;
-    }
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      let v = all ? 1 : 0;
-      for (let t = -r; t <= r; t++) {
-        const yy = y + t;
-        if (yy < 0 || yy >= h) continue;
-        if (all) v &= a[yy * w + x]; else v |= a[yy * w + x];
-      }
-      b[y * w + x] = v;
-    }
+    };
+    pass(m, a, h, w, 1); // theo hàng
+    pass(a, b, w, h, w); // theo cột
     return b;
   }
 
@@ -178,23 +177,117 @@
     return Math.acos(Math.max(-1, Math.min(1, c))) / (Math.PI / 180);
   }
 
-  /** px: RGBA (ImageData.data) của ảnh đã thu nhỏ w×h.
-   *  -> {quad: [[x,y] TL,TR,BR,BL theo tỉ lệ 0..1], full: thấy đủ 4 mép} hoặc null. */
-  function detect(px, w, h) {
-    if (w < 32 || h < 32) return null;
-    const g = gray(px, w, h);
-    const r = Math.max(2, Math.floor((Math.max(w, h) + 48) / 96));
-    const blur = blurV(blurH(blurV(blurH(g, w, h, r), w, h, r), w, h, r), w, h, r);
-    const t = otsu(blur);
-    let mask = new Uint8Array(w * h);
-    for (let i = 0; i < mask.length; i++) mask[i] = blur[i] > t ? 1 : 0;
-    mask = morph(morph(mask, w, h, 2, true), w, h, 2, false); // bỏ chi tiết mảnh dính vào tờ giấy
-    const bg = components(mask, w, h, 0);                    // lấp lỗ (chữ, dấu, ảnh trong giấy)
+  const blur2 = (a, w, h, r) => blurV(blurH(blurV(blurH(a, w, h, r), w, h, r), w, h, r), w, h, r);
+  const open = (m, w, h, r) => morph(morph(m, w, h, r, true), w, h, r, false);
+  const g3 = (a, b, c) => Math.floor((299 * a + 587 * b + 114 * c + 500) / 1000);
+
+  function fillHoles(mask, w, h) { // lấp lỗ (chữ, dấu, ảnh trong giấy): vùng tối không chạm mép ảnh
+    const bg = components(mask, w, h, 0);
     for (let i = 0; i < mask.length; i++) if (!mask[i] && !bg.comps[bg.lab[i]].border) mask[i] = 1;
+    return mask;
+  }
+
+  // khoảng cách màu tới màu tờ giấy ở giữa khung (như _paper_distance): theo sắc độ, làm mờ nhẹ
+  function paperDistance(px, w, h, r) {
+    const n = w * h, ch = [new Int32Array(n), new Int32Array(n), new Int32Array(n)];
+    for (let i = 0, p = 0; i < n; i++, p += 4) { ch[0][i] = px[p]; ch[1][i] = px[p + 1]; ch[2][i] = px[p + 2]; }
+    const rb = Math.max(1, Math.floor(r / 3));
+    const B = ch.map((c) => blur2(c, w, h, rb));
+    const y0 = Math.floor((h * 35) / 100), y1 = Math.floor((h * 65) / 100);
+    const x0 = Math.floor((w * 35) / 100), x1 = Math.floor((w * 65) / 100);
+    const win = [];
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) win.push(y * w + x);
+    const Lw = Int32Array.from(win, (i) => g3(B[0][i], B[1][i], B[2][i]));
+    const med = Int32Array.from(Lw).sort()[(Lw.length - 1) >> 1];
+    const ref = B.map((c) => {
+      const v = [];
+      for (let k = 0; k < win.length; k++) if (Lw[k] >= med) v.push(c[win[k]]); // nửa sáng hơn: bỏ chữ, mực
+      const sv = Int32Array.from(v).sort();
+      return sv[(sv.length - 1) >> 1];
+    });
+    const L0 = g3(ref[0], ref[1], ref[2]), dr = ref[0] - ref[1], db = ref[2] - ref[1];
+    if (L0 < 120 || Math.max(...ref) - Math.min(...ref) > 60) return null; // giữa khung không phải màu giấy
+    const dist = (C) => {
+      const out = new Int32Array(n);
+      for (let i = 0; i < n; i++) {
+        const d = 2 * (Math.abs(C[0][i] - C[1][i] - dr) + Math.abs(C[2][i] - C[1][i] - db)) +
+          Math.max(0, L0 - g3(C[0][i], C[1][i], C[2][i]) - 40);
+        out[i] = Math.min(d, 255);
+      }
+      return out;
+    };
+    const Db = dist(B), Dr = dist(ch);
+    const v = Int32Array.from(win, (i) => Db[i]).sort();
+    return { Db, Dr, t: Math.min(32, Math.max(16, 2 * v[(v.length - 1) >> 1] + 10)) };
+  }
+
+  // khớp đường thẳng cho từng mép rồi lấy giao điểm làm góc (như _refine)
+  function refine(q, lab, id, w, h, border) {
+    const rx0 = new Int32Array(h).fill(-1), rx1 = new Int32Array(h), cmin = new Int32Array(w).fill(h), cmax = new Int32Array(w).fill(-1);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (lab[y * w + x] !== id) continue;
+      if (rx0[y] < 0) rx0[y] = x;
+      rx1[y] = x + 1;
+      if (y < cmin[x]) cmin[x] = y;
+      if (y > cmax[x]) cmax[x] = y;
+    }
+    const pts = [];
+    for (let y = 0; y < h; y++) if (rx0[y] >= 0) pts.push([rx0[y], y + 0.5], [rx1[y], y + 0.5]);
+    for (let x = 0; x < w; x++) if (cmax[x] >= 0) pts.push([x + 0.5, cmin[x]], [x + 0.5, cmax[x] + 1]);
+    const tol = 3 + 0.01 * Math.max(w, h);
+    const lines = [];
+    for (let i = 0; i < 4; i++) {
+      const a = q[i], b = q[(i + 1) % 4], ex = b[0] - a[0], ey = b[1] - a[1], L = Math.sqrt(ex * ex + ey * ey);
+      let line = [a[0], a[1], ex, ey];
+      if (!border[i]) {
+        const ux = ex / L, uy = ey / L, sel = [];
+        for (const [px, py] of pts) {
+          if (px <= 0 || px >= w || py <= 0 || py >= h) continue; // mép ảnh, không phải mép giấy
+          const dx = px - a[0], dy = py - a[1], t = (dx * ux + dy * uy) / L;
+          if (t >= 0.15 && t <= 0.85 && Math.abs(dx * uy - dy * ux) <= tol) sel.push([px, py]);
+        }
+        if (sel.length >= 12) {
+          const n = sel.length;
+          let mx = 0, my = 0;
+          for (const [px, py] of sel) { mx += px; my += py; }
+          mx /= n; my /= n;
+          let sxx = 0, sxy = 0, syy = 0;
+          for (const [px, py] of sel) { const dx = px - mx, dy = py - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+          const hd = (sxx - syy) / 2, lam = (sxx + syy) / 2 + Math.sqrt(hd * hd + sxy * sxy);
+          const v1 = [lam - syy, sxy], v2 = [sxy, lam - sxx];
+          const [vx, vy] = Math.abs(v1[0]) + Math.abs(v1[1]) >= Math.abs(v2[0]) + Math.abs(v2[1]) ? v1 : v2;
+          if (vx !== 0 || vy !== 0) line = [mx, my, vx, vy];
+        }
+      }
+      lines.push(line);
+    }
+    const out = [], lim = 0.04 * Math.max(w, h);
+    for (let i = 0; i < 4; i++) {
+      const [m1x, m1y, v1x, v1y] = lines[(i + 3) % 4], [m2x, m2y, v2x, v2y] = lines[i];
+      const d = v1x * v2y - v1y * v2x;
+      if (Math.abs(d) < 1e-9) return q;
+      const s = ((m2x - m1x) * v2y - (m2y - m1y) * v2x) / d;
+      const cx = m1x + s * v1x, cy = m1y + s * v1y, ox = cx - q[i][0], oy = cy - q[i][1];
+      if (ox * ox + oy * oy > lim * lim) return q;
+      out.push([Math.min(Math.max(cx, 0), w), Math.min(Math.max(cy, 0), h)]);
+    }
+    return out;
+  }
+
+  // vùng giấy (đã lấp lỗ) -> {q, full, area} đã kiểm tra kỹ, hoặc null (như _candidate)
+  function candidate(mask, F, w, h, center) {
     const { lab, comps } = components(mask, w, h, 1);
     if (!comps.length) return null;
-    let id = 0;
-    for (let c = 1; c < comps.length; c++) if (comps[c].area > comps[id].area) id = c;
+    let id = -1;
+    if (center) {
+      const c0 = Math.floor(h / 2) * w + Math.floor(w / 2);
+      if (mask[c0]) id = lab[c0];
+      if (id >= 0 && comps[id].area < MIN_AREA * w * h) id = -1;
+    }
+    if (id < 0) {
+      id = 0;
+      for (let c = 1; c < comps.length; c++) if (comps[c].area > comps[id].area) id = c;
+    }
     const area = comps[id].area;
     if (area < MIN_AREA * w * h) return null;
     const pts = [];
@@ -221,16 +314,44 @@
       if (!(A >= 45 && A <= 135)) return null;
     }
     const cx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4, cy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
-    const bx = BORDER * w, by = BORDER * h;
-    let nBorder = 0;
+    const bx = BORDER * w, by = BORDER * h, border = [];
     for (let i = 0; i < 4; i++) {
       const a = q[i], b = q[(i + 1) % 4];
-      if ((a[0] <= bx && b[0] <= bx) || (a[0] >= w - bx && b[0] >= w - bx) ||
-          (a[1] <= by && b[1] <= by) || (a[1] >= h - by && b[1] >= h - by)) nBorder++; // giấy tràn khung
-      else if (edgeStep(g, w, h, a, b, cx, cy) < EDGE_STEP) return null;           // không có mép rõ
+      const on = (a[0] <= bx && b[0] <= bx) || (a[0] >= w - bx && b[0] >= w - bx) ||
+        (a[1] <= by && b[1] <= by) || (a[1] >= h - by && b[1] >= h - by);
+      border.push(on);                                                      // giấy tràn khung ở cạnh này
+      if (!on && edgeStep(F, w, h, a, b, cx, cy) < EDGE_STEP) return null;   // không có mép rõ
     }
-    if (nBorder > 2) return null;
-    return { quad: q.map((p) => [p[0] / w, p[1] / h]), full: nBorder === 0 };
+    if (border.filter(Boolean).length > 2) return null;
+    return { q: refine(q, lab, id, w, h, border), full: !border.some(Boolean), area: qa };
+  }
+
+  /** px: RGBA (ImageData.data) của ảnh đã thu nhỏ w×h.
+   *  -> {quad: [[x,y] TL,TR,BR,BL theo tỉ lệ 0..1], full: thấy đủ 4 mép} hoặc null.
+   *  Hai cách tìm (như detect_small): theo độ sáng, và theo màu giấy ở giữa khung (nền sáng như vải sọc).
+   *  Cả hai đạt thì lấy cái khít hơn nhưng không nhỏ hơn cách 1 quá 15%. */
+  function detect(px, w, h) {
+    if (w < 32 || h < 32) return null;
+    const g = gray(px, w, h);
+    const r = Math.max(2, Math.floor((Math.max(w, h) + 48) / 96));
+    const blur = blur2(g, w, h, r);
+    const t1 = otsu(blur);
+    let m1 = new Uint8Array(w * h);
+    for (let i = 0; i < m1.length; i++) m1[i] = blur[i] > t1 ? 1 : 0;
+    const c1 = candidate(fillHoles(open(m1, w, h, 2), w, h), g, w, h, false);
+    let c2 = null;
+    const pd = paperDistance(px, w, h, r);
+    if (pd) {
+      let m2 = new Uint8Array(w * h);
+      for (let i = 0; i < m2.length; i++) m2[i] = pd.Db[i] <= pd.t ? 1 : 0;
+      const ro = Math.max(2, Math.floor((Math.max(w, h) * 2 + 50) / 100));
+      m2 = open(fillHoles(open(m2, w, h, 2), w, h), w, h, ro); // cắt các sọc/vệt mảnh dính vào giấy
+      c2 = candidate(m2, pd.Dr.map((d) => 255 - d), w, h, true);
+    }
+    let best = c1;
+    if (c2 && (!c1 || (0.85 * c1.area <= c2.area && c2.area < c1.area))) best = c2;
+    if (!best) return null;
+    return { quad: best.q.map((p) => [p[0] / w, p[1] / h]), full: best.full };
   }
 
   /* ------------------------------------------------------------ nắn thẳng */
